@@ -1,0 +1,73 @@
+[
+  {
+    "name": "Chamonix-Mont-Blanc",
+    "latitude": 45.9237,
+    "longitude": 6.8694,
+    "region": "Alpes",
+    "tags": ["montagne", "alpes", "randonnee"]
+  },
+  {
+    "name": "Briancon",
+    "latitude": 44.8996,
+    "longitude": 6.6422,
+    "region": "Alpes du Sud",
+    "tags": ["montagne", "ski", "alpes"]
+  },
+  {
+    "name": "Bourg-Saint-Maurice",
+    "latitude": 45.6172,
+    "longitude": 6.7695,
+    "region": "Tarentaise",
+    "tags": ["montagne", "ski", "alpes"]
+  },
+  {
+    "name": "Saint-Gervais-les-Bains-Le Fayet",
+    "latitude": 45.9053,
+    "longitude": 6.7006,
+    "region": "Mont-Blanc",
+    "tags": ["montagne", "alpes"]
+  },
+  {
+    "name": "Modane",
+    "latitude": 45.2013,
+    "longitude": 6.6694,
+    "region": "Maurienne",
+    "tags": ["montagne", "alpes"]
+  },
+  {
+    "name": "Annecy",
+    "latitude": 45.8992,
+    "longitude": 6.1294,
+    "region": "Haute-Savoie",
+    "tags": ["lac", "alpes", "journee"]
+  },
+  {
+    "name": "Grenoble",
+    "latitude": 45.1908,
+    "longitude": 5.7140,
+    "region": "Isere",
+    "tags": ["montagne", "alpes", "porte"]
+  },
+  {
+    "name": "Aix-les-Bains-Le Revard",
+    "latitude": 45.6887,
+    "longitude": 5.9155,
+    "region": "Savoie",
+    "tags": ["lac", "montagne", "alpes"]
+  },
+  {
+    "name": "Lourdes",
+    "latitude": 43.0961,
+    "longitude": -0.0465,
+    "region": "Pyrenees",
+    "tags": ["montagne", "pyrenees"]
+  },
+  {
+    "name": "Latour-de-Carol-Enveitg",
+    "latitude": 42.4597,
+    "longitude": 1.9056,
+    "region": "Pyrenees",
+    "tags": ["montagne", "pyrenees", "train jaune"]
+  }
+]
+

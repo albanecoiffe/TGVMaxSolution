@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ meta.app_name }} - {{ page.label }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="background-glow background-glow-a"></div>
+    <div class="background-glow background-glow-b"></div>
+
+    <main class="page-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">SNCF MAX</p>
+          <h1>{{ page.hero_title }}</h1>
+          <p class="hero-text">
+            {{ page.hero_text }}
+          </p>
+          <div class="hero-meta">
+            <span>Fenetre de donnees : {{ meta.date_min }} -> {{ meta.date_max }}</span>
+            <span>Hybride TER : {{ "actif" if meta.hybrid_enabled else "desactive" }}</span>
+            <span>Page active : {{ page.label }}</span>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="panel-title">Parametres</div>
+          <form id="search-form" class="search-grid">
+            {% if "origin" in page.fields %}
+            <label>
+              <span>Depart</span>
+              <input id="origin-input" name="origin" type="text" placeholder="Paris, Lille Europe, Lyon..." autocomplete="off" />
+              <div id="station-suggestions" class="suggestions"></div>
+            </label>
+            {% endif %}
+
+            {% if "date" in page.fields %}
+            <label>
+              <span>Date</span>
+              <input id="date-input" name="date" type="date" min="{{ meta.date_min }}" max="{{ meta.date_max }}" />
+            </label>
+            {% endif %}
+
+            {% if "return_date" in page.fields %}
+            <label>
+              <span>Date de retour (optionnelle)</span>
+              <input id="return-date-input" name="return_date" type="date" min="{{ meta.date_min }}" max="{{ meta.date_max }}" />
+            </label>
+            {% endif %}
+
+            {% if "min_stay_minutes" in page.fields %}
+            <label>
+              <span>Temps mini sur place</span>
+              <input id="min-stay-input" name="min_stay_minutes" type="number" min="30" step="30" value="{{ filters.min_stay_minutes }}" />
+            </label>
+            {% endif %}
+
+            {% if "latest_return_time" in page.fields %}
+            <label>
+              <span>Retour avant</span>
+              <input id="latest-return-input" name="latest_return_time" type="time" value="{{ filters.latest_return_time }}" />
+            </label>
+            {% endif %}
+
+            {% if "min_connection_minutes" in page.fields %}
+            <label>
+              <span>Correspondance mini</span>
+              <input id="min-connection-input" name="min_connection_minutes" type="number" min="5" step="5" value="{{ filters.min_connection_minutes }}" />
+            </label>
+            {% endif %}
+
+            {% if "max_connections" in page.fields %}
+            <label>
+              <span>Nombre max de correspondances</span>
+              <input id="max-connections-input" name="max_connections" type="number" min="0" max="3" value="{{ filters.max_connections }}" />
+            </label>
+            {% endif %}
+
+            {% if "destination" in page.fields %}
+            <label class="wide">
+              <span>Destination finale apres le MAX</span>
+              <input id="hybrid-destination-input" name="destination" type="text" placeholder="Ex: Chamonix-Mont-Blanc, Briancon, Bourg-Saint-Maurice..." list="mountain-datalist" />
+            </label>
+            {% endif %}
+
+            <div class="actions wide">
+              <button type="submit" class="primary-button">Explorer</button>
+              <button type="button" id="refresh-button" class="secondary-button">Rafraichir les donnees</button>
+            </div>
+          </form>
+          <datalist id="mountain-datalist">
+            {% for item in meta.mountain_destinations %}
+            <option value="{{ item.name }}"></option>
+            {% endfor %}
+          </datalist>
+          {% if page.key == "hybrid" %}
+          <div class="inline-help{% if not meta.hybrid_enabled %} inline-help-warning{% endif %}">
+            <strong>Comment lire cette page :</strong>
+            la destination finale est l'endroit que tu veux atteindre apres la derniere gare accessible en MAX.
+            Exemple : `Paris -> Annecy` en MAX, puis `Annecy -> Chamonix` en TER.
+            {% if not meta.hybrid_enabled %}
+            Cette fonction est actuellement desactivee car `SNCF_API_TOKEN` n'est pas configure cote serveur.
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </section>
+
+      <nav class="section-nav" aria-label="Sections">
+        {% for item in pages %}
+        <a
+          class="section-link{% if item.key == page.key %} is-active{% endif %}"
+          data-base-href="{{ item.path }}"
+          href="{{ item.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"
+        >
+          <span class="section-link-title">{{ item.label }}</span>
+        </a>
+        {% endfor %}
+      </nav>
+
+      <section class="dashboard">
+        <div class="results-column">
+          <article class="card page-card">
+            <div class="card-header">
+              <h2>{{ page.result_title }}</h2>
+              <p id="result-summary" class="muted">{{ page.result_help }}</p>
+            </div>
+            <div id="results" class="result-list"></div>
+          </article>
+        </div>
+
+        <aside class="map-column">
+          <article class="card map-card">
+            <div class="card-header card-header-map">
+              <div class="card-header-copy">
+                <h2>Carte</h2>
+                <p class="muted">{{ page.map_help }}</p>
+              </div>
+              <div id="map-legend" class="map-legend"></div>
+            </div>
+            <div id="map"></div>
+          </article>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      window.MAX_EXPLORER_META = {{ meta | tojson }};
+      window.MAX_EXPLORER_PAGE = {{ page | tojson }};
+      window.MAX_EXPLORER_FILTERS = {{ filters | tojson }};
+    </script>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

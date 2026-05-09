@@ -1,0 +1,22 @@
+[project]
+name = "max-explorer"
+version = "0.1.0"
+description = "Exploreur d'itineraires SNCF MAX"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.118.0",
+  "jinja2>=3.1.6",
+  "pandas>=2.3.0",
+  "requests>=2.32.3",
+  "uvicorn>=0.37.0",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28.1",
+  "pytest>=8.3.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
