@@ -22,4 +22,7 @@ class DataBundle:
     stations: dict[str, StationRecord]
     station_names: list[str]
     generated_at: datetime
-
+    rail_segments: pd.DataFrame | None = None
+    rail_stops: dict[str, StationRecord] | None = None
+    rail_calendar: pd.DataFrame | None = None
+    rail_exceptions: pd.DataFrame | None = None

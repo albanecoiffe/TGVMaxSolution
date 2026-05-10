@@ -6,8 +6,10 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from app.config import Settings
+from app.services.live_availability import LiveAvailabilityVerifier
 from app.services.planner import TravelPlanner
 
 
@@ -43,20 +45,44 @@ PAGES = {
         "map_help": "Destinations accessibles en combinant plusieurs segments MAX.",
         "result_title": "Correspondances MAX",
         "result_help": "Cette page n'affiche que des itineraires avec au moins une correspondance reelle.",
-        "fields": ["origin", "date", "return_date", "min_connection_minutes", "max_connections"],
+        "fields": [
+            "origin",
+            "date",
+            "return_date",
+            "min_connection_minutes",
+            "max_connection_minutes",
+            "max_connections",
+        ],
     },
     "hybrid": {
         "key": "hybrid",
         "path": "/max-ter",
         "label": "MAX + TER",
-        "hero_title": "Prolonger un trajet MAX par du TER pour atteindre plus de coins montagne.",
-        "hero_text": "Cette page cherche d'abord la meilleure arrivee en MAX, puis calcule un prolongement TER vers une destination finale comme Chamonix, Briancon ou Bourg-Saint-Maurice.",
-        "map_help": "Derniere gare atteinte en MAX puis destination finale visee apres le segment TER.",
+        "hero_title": "Lister automatiquement les prolongements TER apres un trajet MAX.",
+        "hero_text": "Cette page cherche les gares atteignables en MAX pour la date choisie, puis affiche les prolongements ferroviaires ouverts depuis ces gares sans demander de destination finale.",
+        "map_help": "Derniere gare atteinte en MAX puis gare finale accessible en prolongement ferroviaire.",
         "result_title": "MAX + TER",
-        "result_help": "Renseigne la destination que tu veux atteindre apres la partie MAX.",
-        "fields": ["origin", "date", "return_date", "destination", "min_connection_minutes", "max_connections"],
+        "result_help": "La liste se remplit automatiquement a partir des gares accessibles en MAX.",
+        "fields": [
+            "origin",
+            "date",
+            "return_date",
+            "min_connection_minutes",
+            "max_connection_minutes",
+            "max_connections",
+        ],
     },
 }
+
+
+class DirectLiveTripRequest(BaseModel):
+    id: str = Field(min_length=1)
+    booking_url: str = Field(min_length=1)
+
+
+class DirectLiveCheckRequest(BaseModel):
+    trips: list[DirectLiveTripRequest] = Field(default_factory=list)
+    limit: int | None = Field(default=None, ge=1, le=50)
 
 
 def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> dict:
@@ -67,9 +93,9 @@ def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> di
         "return_date": request.query_params.get("return_date", ""),
         "min_stay_minutes": request.query_params.get("min_stay_minutes", "240"),
         "min_connection_minutes": request.query_params.get("min_connection_minutes", "25"),
+        "max_connection_minutes": request.query_params.get("max_connection_minutes", ""),
         "max_connections": request.query_params.get("max_connections", "2"),
         "latest_return_time": request.query_params.get("latest_return_time", "23:30"),
-        "destination": request.query_params.get("destination", ""),
     }
     return {
         "meta": meta,
@@ -80,13 +106,18 @@ def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> di
     }
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    live_verifier: LiveAvailabilityVerifier | None = None,
+) -> FastAPI:
     app_settings = settings or Settings()
     planner = TravelPlanner(app_settings)
+    verifier = live_verifier or LiveAvailabilityVerifier(app_settings)
 
     app = FastAPI(title=app_settings.app_name)
     app.state.settings = app_settings
     app.state.planner = planner
+    app.state.live_verifier = verifier
 
     templates = Jinja2Templates(directory=str(app_settings.templates_dir))
     app.mount("/static", StaticFiles(directory=str(app_settings.static_dir)), name="static")
@@ -134,6 +165,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.post("/api/direct/live")
+    def direct_live_check(payload: DirectLiveCheckRequest):
+        if not payload.trips:
+            return {
+                "verified_count": 0,
+                "limit": payload.limit or app_settings.live_check_default_limit,
+                "cache_minutes": app_settings.live_check_cache_minutes,
+                "results": [],
+                "summary": {
+                    "confirmed_zero": 0,
+                    "unavailable": 0,
+                    "blocked": 0,
+                    "unknown": 0,
+                    "error": 0,
+                },
+            }
+        return verifier.verify_trips(
+            trips=[trip.model_dump() for trip in payload.trips],
+            limit=payload.limit,
+        )
+
     @app.get("/api/day-trips")
     def day_trips(
         origin: str,
@@ -159,6 +211,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         travel_date: date = Query(alias="date"),
         max_connections: int = 2,
         min_connection_minutes: int = 25,
+        max_connection_minutes: int | None = None,
     ):
         try:
             return planner.max_itineraries(
@@ -166,6 +219,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 travel_date=travel_date,
                 max_connections=max_connections,
                 min_connection_minutes=min_connection_minutes,
+                max_connection_minutes=max_connection_minutes,
                 min_connections=1,
             )
         except ValueError as exc:
@@ -175,17 +229,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def routes_hybrid(
         origin: str,
         travel_date: date = Query(alias="date"),
-        destination: str = Query(min_length=2),
         max_connections: int = 2,
         min_connection_minutes: int = 25,
+        max_connection_minutes: int | None = None,
     ):
         try:
             payload = planner.hybrid_itineraries(
                 origin_query=origin,
                 travel_date=travel_date,
-                destination_query=destination,
                 max_connections=max_connections,
                 min_connection_minutes=min_connection_minutes,
+                max_connection_minutes=max_connection_minutes,
             )
             if not payload["enabled"]:
                 return JSONResponse(payload, status_code=412)

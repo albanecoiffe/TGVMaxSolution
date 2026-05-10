@@ -49,6 +49,21 @@ def parse_datetime_from_strings(day: str, hhmm: str | None) -> datetime | None:
     return datetime.combine(parsed_day, parsed_time)
 
 
+def parse_gtfs_time_to_minutes(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        hour_text, minute_text, *rest = value.strip().split(":")
+        hour = int(hour_text)
+        minute = int(minute_text)
+        second = int(rest[0]) if rest else 0
+    except (ValueError, AttributeError):
+        return None
+    if hour < 0 or minute < 0 or minute > 59 or second < 0 or second > 59:
+        return None
+    return hour * 60 + minute + (1 if second >= 30 else 0)
+
+
 def duration_minutes(start: datetime, end: datetime) -> int:
     return max(0, int((end - start).total_seconds() // 60))
 
@@ -104,4 +119,3 @@ def match_score(candidate: str, query: str) -> int:
 
 def add_minutes(moment: datetime, minutes: int) -> datetime:
     return moment + timedelta(minutes=minutes)
-

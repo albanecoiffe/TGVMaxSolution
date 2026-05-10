@@ -25,8 +25,15 @@ class Settings:
         "MAX_EXPLORER_STATIONS_URL",
         "https://ressources.data.sncf.com/api/explore/v2.1/catalog/datasets/gares-de-voyageurs/exports/geojson",
     )
+    sncf_gtfs_url: str = os.getenv(
+        "MAX_EXPLORER_SNCF_GTFS_URL",
+        "https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip",
+    )
     sncf_api_token: str | None = os.getenv("SNCF_API_TOKEN")
     max_itinerary_results: int = int(os.getenv("MAX_EXPLORER_MAX_RESULTS", "40"))
+    live_check_timeout_seconds: int = int(os.getenv("MAX_EXPLORER_LIVE_CHECK_TIMEOUT", "20"))
+    live_check_cache_minutes: int = int(os.getenv("MAX_EXPLORER_LIVE_CHECK_CACHE_MINUTES", "10"))
+    live_check_default_limit: int = int(os.getenv("MAX_EXPLORER_LIVE_CHECK_LIMIT", "20"))
 
     @property
     def cache_dir(self) -> Path:
@@ -41,6 +48,10 @@ class Settings:
         return self.cache_dir / "gares-de-voyageurs.geojson"
 
     @property
+    def sncf_gtfs_cache_file(self) -> Path:
+        return self.cache_dir / "sncf-gtfs.zip"
+
+    @property
     def mountains_file(self) -> Path:
         return self.data_dir / "mountains.json"
 
@@ -51,4 +62,3 @@ class Settings:
     @property
     def static_dir(self) -> Path:
         return BASE_DIR / "app" / "static"
-

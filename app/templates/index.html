@@ -16,7 +16,7 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v={{ meta.generated_at }}" />
   </head>
   <body>
     <div class="background-glow background-glow-a"></div>
@@ -77,8 +77,15 @@
 
             {% if "min_connection_minutes" in page.fields %}
             <label>
-              <span>Correspondance mini</span>
-              <input id="min-connection-input" name="min_connection_minutes" type="number" min="5" step="5" value="{{ filters.min_connection_minutes }}" />
+              <span>Correspondance mini (minutes)</span>
+              <input id="min-connection-input" name="min_connection_minutes" type="number" min="5" step="5" value="{{ filters.min_connection_minutes }}" placeholder="ex. 25 min" />
+            </label>
+            {% endif %}
+
+            {% if "max_connection_minutes" in page.fields %}
+            <label>
+              <span>Correspondance max (minutes)</span>
+              <input id="max-connection-input" name="max_connection_minutes" type="number" min="5" step="5" value="{{ filters.max_connection_minutes }}" placeholder="ex. 60 min, vide = illimitee" />
             </label>
             {% endif %}
 
@@ -89,30 +96,18 @@
             </label>
             {% endif %}
 
-            {% if "destination" in page.fields %}
-            <label class="wide">
-              <span>Destination finale apres le MAX</span>
-              <input id="hybrid-destination-input" name="destination" type="text" placeholder="Ex: Chamonix-Mont-Blanc, Briancon, Bourg-Saint-Maurice..." list="mountain-datalist" />
-            </label>
-            {% endif %}
-
             <div class="actions wide">
-              <button type="submit" class="primary-button">Explorer</button>
+              <button type="button" id="explore-button" class="primary-button">Explorer</button>
               <button type="button" id="refresh-button" class="secondary-button">Rafraichir les donnees</button>
             </div>
           </form>
-          <datalist id="mountain-datalist">
-            {% for item in meta.mountain_destinations %}
-            <option value="{{ item.name }}"></option>
-            {% endfor %}
-          </datalist>
           {% if page.key == "hybrid" %}
           <div class="inline-help{% if not meta.hybrid_enabled %} inline-help-warning{% endif %}">
             <strong>Comment lire cette page :</strong>
-            la destination finale est l'endroit que tu veux atteindre apres la derniere gare accessible en MAX.
-            Exemple : `Paris -> Annecy` en MAX, puis `Annecy -> Chamonix` en TER.
+            l'application part des gares atteignables en MAX a 0 EUR, puis affiche les prolongements ferroviaires qu'elle trouve ensuite.
+            Exemple : `Paris -> Lyon Part Dieu` en MAX, puis `Lyon Part Dieu -> Saint Gervais -> Chamonix` en TER.
             {% if not meta.hybrid_enabled %}
-            Cette fonction est actuellement desactivee car `SNCF_API_TOKEN` n'est pas configure cote serveur.
+            Cette fonction est actuellement desactivee car le GTFS SNCF ouvert n'est pas disponible cote serveur.
             {% endif %}
           </div>
           {% endif %}
@@ -135,8 +130,11 @@
         <div class="results-column">
           <article class="card page-card">
             <div class="card-header">
-              <h2>{{ page.result_title }}</h2>
-              <p id="result-summary" class="muted">{{ page.result_help }}</p>
+              <div class="card-header-copy">
+                <h2>{{ page.result_title }}</h2>
+                <p id="result-summary" class="muted">{{ page.result_help }}</p>
+              </div>
+              <div id="result-actions" class="result-actions"></div>
             </div>
             <div id="results" class="result-list"></div>
           </article>
@@ -167,6 +165,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v={{ meta.generated_at }}" defer></script>
   </body>
 </html>

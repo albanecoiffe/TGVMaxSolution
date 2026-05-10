@@ -4,13 +4,14 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
+from zipfile import ZipFile
 
 import pandas as pd
 import requests
 
 from app.config import Settings
 from app.models import DataBundle, StationRecord
-from app.utils import normalize_header, normalize_text, parse_coord_string
+from app.utils import normalize_header, normalize_text, parse_coord_string, parse_gtfs_time_to_minutes
 
 
 MAX_COLUMN_CANDIDATES = {
@@ -61,12 +62,17 @@ class DataRepository:
     def _build_bundle(self) -> DataBundle:
         trips = self._load_tgvmax()
         stations = self._load_stations()
+        rail_segments, rail_stops, rail_calendar, rail_exceptions = self._load_sncf_gtfs()
         station_names = sorted(stations.keys())
         return DataBundle(
             trips=trips,
             stations=stations,
             station_names=station_names,
             generated_at=datetime.now(),
+            rail_segments=rail_segments,
+            rail_stops=rail_stops,
+            rail_calendar=rail_calendar,
+            rail_exceptions=rail_exceptions,
         )
 
     def _files_stale(self) -> bool:
@@ -74,6 +80,7 @@ class DataRepository:
         cache_files = [
             self.settings.tgvmax_cache_file,
             self.settings.stations_cache_file,
+            self.settings.sncf_gtfs_cache_file,
         ]
         now = datetime.now()
         for cache_file in cache_files:
@@ -96,8 +103,14 @@ class DataRepository:
             self.settings.stations_cache_file,
             force=force,
         )
+        self._ensure_file(
+            self.settings.sncf_gtfs_url,
+            self.settings.sncf_gtfs_cache_file,
+            force=force,
+            optional=True,
+        )
 
-    def _ensure_file(self, url: str, destination: Path, force: bool) -> None:
+    def _ensure_file(self, url: str, destination: Path, force: bool, optional: bool = False) -> None:
         if destination.exists() and not force and not self._files_stale():
             return
         try:
@@ -105,6 +118,8 @@ class DataRepository:
             response.raise_for_status()
         except requests.RequestException:
             if destination.exists():
+                return
+            if optional:
                 return
             raise
         destination.write_bytes(response.content)
@@ -201,6 +216,200 @@ class DataRepository:
             )
             stations[station.name] = station
         return stations
+
+    def _load_sncf_gtfs(
+        self,
+    ) -> tuple[pd.DataFrame | None, dict[str, StationRecord] | None, pd.DataFrame | None, pd.DataFrame | None]:
+        archive_path = self.settings.sncf_gtfs_cache_file
+        if not archive_path.exists():
+            return None, None, None, None
+
+        try:
+            with ZipFile(archive_path) as archive:
+                stops = self._read_gtfs_csv(
+                    archive,
+                    "stops.txt",
+                    ["stop_id", "stop_name", "stop_lat", "stop_lon"],
+                )
+                trips = self._read_gtfs_csv(
+                    archive,
+                    "trips.txt",
+                    ["trip_id", "route_id", "service_id", "trip_headsign"],
+                )
+                stop_times = self._read_gtfs_csv(
+                    archive,
+                    "stop_times.txt",
+                    ["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"],
+                )
+                routes = self._read_gtfs_csv(
+                    archive,
+                    "routes.txt",
+                    ["route_id", "route_short_name", "route_long_name", "route_type"],
+                )
+                calendar = self._read_gtfs_csv(
+                    archive,
+                    "calendar.txt",
+                    [
+                        "service_id",
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday",
+                        "start_date",
+                        "end_date",
+                    ],
+                    required=False,
+                )
+                calendar_dates = self._read_gtfs_csv(
+                    archive,
+                    "calendar_dates.txt",
+                    ["service_id", "date", "exception_type"],
+                    required=False,
+                )
+        except (KeyError, ValueError, OSError):
+            return None, None, None, None
+
+        if stops.empty or trips.empty or stop_times.empty:
+            return None, None, None, None
+
+        stop_lookup = (
+            stops[["stop_id", "stop_name", "stop_lat", "stop_lon"]]
+            .dropna(subset=["stop_id", "stop_name"])
+            .copy()
+        )
+        stop_lookup["stop_name"] = stop_lookup["stop_name"].astype(str).str.strip()
+        stop_lookup["stop_lat"] = pd.to_numeric(stop_lookup["stop_lat"], errors="coerce")
+        stop_lookup["stop_lon"] = pd.to_numeric(stop_lookup["stop_lon"], errors="coerce")
+
+        rail_stops: dict[str, StationRecord] = {}
+        grouped_stops = stop_lookup.dropna(subset=["stop_lat", "stop_lon"]).groupby("stop_name", as_index=False)
+        for row in grouped_stops.agg({"stop_lat": "mean", "stop_lon": "mean"}).itertuples(index=False):
+            rail_stops[row.stop_name] = StationRecord(
+                name=row.stop_name,
+                latitude=float(row.stop_lat),
+                longitude=float(row.stop_lon),
+            )
+
+        stop_times = stop_times.dropna(subset=["trip_id", "stop_id", "departure_time", "arrival_time"]).copy()
+        stop_times["stop_sequence"] = pd.to_numeric(stop_times["stop_sequence"], errors="coerce")
+        stop_times = stop_times.dropna(subset=["stop_sequence"]).sort_values(["trip_id", "stop_sequence"])
+        stop_times["departure_minutes"] = stop_times["departure_time"].map(parse_gtfs_time_to_minutes)
+        stop_times["arrival_minutes"] = stop_times["arrival_time"].map(parse_gtfs_time_to_minutes)
+        stop_times = stop_times.dropna(subset=["departure_minutes", "arrival_minutes"])
+        stop_times = stop_times.merge(stop_lookup[["stop_id", "stop_name"]], on="stop_id", how="left")
+        stop_times = stop_times.dropna(subset=["stop_name"])
+
+        segments = stop_times[["trip_id", "stop_name", "departure_minutes", "stop_sequence"]].copy()
+        segments["next_stop_name"] = stop_times.groupby("trip_id")["stop_name"].shift(-1)
+        segments["next_arrival_minutes"] = stop_times.groupby("trip_id")["arrival_minutes"].shift(-1)
+        segments["next_trip_id"] = stop_times.groupby("trip_id")["trip_id"].shift(-1)
+        segments = segments[segments["trip_id"] == segments["next_trip_id"]].copy()
+        segments = segments.dropna(subset=["next_stop_name", "next_arrival_minutes"])
+        segments = segments.rename(
+            columns={
+                "stop_name": "from_stop_name",
+                "next_stop_name": "to_stop_name",
+            }
+        )
+        segments = segments.merge(
+            trips[["trip_id", "route_id", "service_id", "trip_headsign"]],
+            on="trip_id",
+            how="left",
+        )
+        if not routes.empty:
+            segments = segments.merge(
+                routes[["route_id", "route_short_name", "route_long_name", "route_type"]],
+                on="route_id",
+                how="left",
+            )
+        else:
+            segments["route_short_name"] = ""
+            segments["route_long_name"] = ""
+            segments["route_type"] = ""
+        segments["label"] = (
+            segments["route_short_name"].fillna("").astype(str).str.strip()
+        )
+        empty_label_mask = segments["label"] == ""
+        segments.loc[empty_label_mask, "label"] = (
+            segments.loc[empty_label_mask, "trip_headsign"].fillna("").astype(str).str.strip()
+        )
+        empty_label_mask = segments["label"] == ""
+        segments.loc[empty_label_mask, "label"] = (
+            segments.loc[empty_label_mask, "route_long_name"].fillna("").astype(str).str.strip()
+        )
+        segments["mode"] = segments["route_type"].map(self._gtfs_route_type_label).fillna("Train")
+        segments = segments[
+            [
+                "trip_id",
+                "service_id",
+                "from_stop_name",
+                "to_stop_name",
+                "departure_minutes",
+                "next_arrival_minutes",
+                "stop_sequence",
+                "label",
+                "mode",
+            ]
+        ].rename(columns={"next_arrival_minutes": "arrival_minutes"})
+        segments = segments.dropna(subset=["service_id"])
+        segments = segments.sort_values(
+            ["from_stop_name", "departure_minutes", "arrival_minutes", "to_stop_name"]
+        ).reset_index(drop=True)
+
+        if calendar is not None and not calendar.empty:
+            calendar = calendar.copy()
+            calendar["start_date"] = pd.to_datetime(calendar["start_date"], format="%Y%m%d", errors="coerce")
+            calendar["end_date"] = pd.to_datetime(calendar["end_date"], format="%Y%m%d", errors="coerce")
+        else:
+            calendar = None
+        if calendar_dates is not None and not calendar_dates.empty:
+            calendar_dates = calendar_dates.copy()
+            calendar_dates["date"] = pd.to_datetime(calendar_dates["date"], format="%Y%m%d", errors="coerce")
+        else:
+            calendar_dates = None
+
+        return segments, rail_stops, calendar, calendar_dates
+
+    @staticmethod
+    def _read_gtfs_csv(
+        archive: ZipFile,
+        filename: str,
+        columns: list[str],
+        required: bool = True,
+    ) -> pd.DataFrame:
+        member_name = DataRepository._find_archive_member(archive, filename)
+        if member_name is None:
+            if required:
+                raise KeyError(filename)
+            return pd.DataFrame(columns=columns)
+        with archive.open(member_name) as handle:
+            frame = pd.read_csv(handle, dtype=str)
+        missing = [column for column in columns if column not in frame.columns]
+        if missing:
+            raise ValueError(f"Colonnes GTFS introuvables dans {filename}: {', '.join(missing)}")
+        return frame[columns].copy()
+
+    @staticmethod
+    def _find_archive_member(archive: ZipFile, filename: str) -> str | None:
+        target = filename.lower()
+        for member_name in archive.namelist():
+            if member_name.lower().endswith(target):
+                return member_name
+        return None
+
+    @staticmethod
+    def _gtfs_route_type_label(value: object) -> str:
+        labels = {
+            "0": "Tram",
+            "1": "Metro",
+            "2": "Train",
+            "3": "Bus",
+            "109": "TER",
+        }
+        return labels.get(str(value), "Train")
 
     @staticmethod
     def _pick_column(columns: pd.Index, candidates: list[str]) -> str | None:

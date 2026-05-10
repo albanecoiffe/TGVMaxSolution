@@ -7,15 +7,17 @@ const dateInput = document.getElementById("date-input");
 const returnDateInput = document.getElementById("return-date-input");
 const minStayInput = document.getElementById("min-stay-input");
 const minConnectionInput = document.getElementById("min-connection-input");
+const maxConnectionInput = document.getElementById("max-connection-input");
 const maxConnectionsInput = document.getElementById("max-connections-input");
 const latestReturnInput = document.getElementById("latest-return-input");
-const hybridDestinationInput = document.getElementById("hybrid-destination-input");
 const searchForm = document.getElementById("search-form");
+const exploreButton = document.getElementById("explore-button");
 const refreshButton = document.getElementById("refresh-button");
 const stationSuggestions = document.getElementById("station-suggestions");
 const resultsContainer = document.getElementById("results");
 const resultSummary = document.getElementById("result-summary");
 const mapLegend = document.getElementById("map-legend");
+const resultActions = document.getElementById("result-actions");
 
 const ROUTE_COLORS = [
   "#db5f32",
@@ -48,10 +50,14 @@ const PAGE_LEGENDS = {
   ],
 };
 
+const DIRECT_LIVE_LIMIT = Math.max(1, Math.min(meta.live_check_default_limit || 20, 50));
+
 let map;
 let markerLayer;
 let polylineLayer;
 let currentMapModel = null;
+let currentDirectTrips = [];
+let currentLiveSummary = null;
 
 function initMap() {
   map = L.map("map", { zoomControl: true }).setView([46.6, 2.5], 6);
@@ -78,17 +84,14 @@ function setDefaultInputs() {
   if (minConnectionInput) {
     minConnectionInput.value = initialFilters.min_connection_minutes || "25";
   }
+  if (maxConnectionInput) {
+    maxConnectionInput.value = initialFilters.max_connection_minutes || "";
+  }
   if (maxConnectionsInput) {
     maxConnectionsInput.value = initialFilters.max_connections || "2";
   }
   if (latestReturnInput) {
     latestReturnInput.value = initialFilters.latest_return_time || "23:30";
-  }
-  if (hybridDestinationInput) {
-    hybridDestinationInput.value = initialFilters.destination || "";
-    if (!meta.hybrid_enabled && !hybridDestinationInput.value) {
-      hybridDestinationInput.placeholder = "Fonction indisponible sans SNCF_API_TOKEN";
-    }
   }
 }
 
@@ -114,7 +117,7 @@ function getParamsObject() {
     latest_return_time: latestReturnInput?.value?.trim() || "",
     max_connections: maxConnectionsInput?.value?.trim() || "",
     min_connection_minutes: minConnectionInput?.value?.trim() || "",
-    destination: hybridDestinationInput?.value?.trim() || "",
+    max_connection_minutes: maxConnectionInput?.value?.trim() || "",
   };
 }
 
@@ -180,6 +183,40 @@ function makeResultKey(prefix, value) {
   return `${prefix}-${normalizeKeyPart(value)}`;
 }
 
+function totalTravelMinutes(segments) {
+  return (segments || []).reduce((sum, segment) => sum + Number(segment.duration_minutes || 0), 0);
+}
+
+function routeOptionKey(destination, index) {
+  return makeResultKey("route-option", `${destination}-${index}`);
+}
+
+function uniqueStationPoints(entries) {
+  const points = [];
+  const seen = new Set();
+
+  entries.forEach((entry) => {
+    const name = entry?.name;
+    const coordinates = entry?.coordinates;
+    if (!name || !coordinates) {
+      return;
+    }
+
+    const identity = `${name}-${coordinates.latitude}-${coordinates.longitude}`;
+    if (seen.has(identity)) {
+      return;
+    }
+
+    seen.add(identity);
+    points.push({
+      name,
+      coordinates,
+    });
+  });
+
+  return points;
+}
+
 function createMapIcon(kind = "destination", isActive = false) {
   const safeKind = ["origin", "destination", "via", "target"].includes(kind) ? kind : "destination";
   const activeClass = isActive ? " is-active" : "";
@@ -206,6 +243,10 @@ function renderMapLegend(items = []) {
       `
     )
     .join("");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replace(/"/g, "&quot;");
 }
 
 function getRouteColor(index) {
@@ -316,6 +357,7 @@ function renderMapModel(model, options = {}) {
     const marker = L.marker([coordinates.latitude, coordinates.longitude], {
       icon: createMapIcon(point.kind, point.key && point.key === model.activeKey),
       keyboard: point.selectable !== false,
+      zIndexOffset: point.kind === "origin" ? 1200 : point.key && point.key === model.activeKey ? 900 : 0,
     });
 
     const popupLines = [`<strong>${escapeHtml(point.name)}</strong>`];
@@ -382,6 +424,291 @@ function bindSelectableCards() {
   });
 }
 
+function liveStatusMarkup(trip) {
+  const status = trip.live_status || "idle";
+  const label = trip.live_status_label || "Non verifie";
+  const reason = trip.live_status_reason || "";
+  return `
+    <div class="live-status-row">
+      <span class="live-status-pill is-${escapeAttribute(status)}" data-live-pill-for="${escapeAttribute(trip.id)}">${escapeHtml(label)}</span>
+      <span class="live-status-note" data-live-note-for="${escapeAttribute(trip.id)}">${escapeHtml(reason)}</span>
+    </div>
+  `;
+}
+
+function updateResultActions() {
+  if (!resultActions) {
+    return;
+  }
+
+  if (page.key !== "direct") {
+    resultActions.innerHTML = "";
+    return;
+  }
+
+  let summaryText = "Verification live optionnelle";
+  if (currentLiveSummary) {
+    summaryText = `${currentLiveSummary.verified_count} controles : ${currentLiveSummary.confirmed_zero} confirmes, ${currentLiveSummary.unavailable} indisponibles, ${currentLiveSummary.blocked} bloques`;
+    if (currentDirectTrips.length > currentLiveSummary.limit) {
+      summaryText += `, ${currentDirectTrips.length - currentLiveSummary.limit} hors lot`;
+    }
+  }
+
+  resultActions.innerHTML = `
+    <button type="button" id="verify-live-button" class="secondary-button">Verifier maintenant</button>
+    <span class="live-status-note">${escapeHtml(summaryText)}</span>
+  `;
+
+  const button = document.getElementById("verify-live-button");
+  if (button) {
+    button.addEventListener("click", verifyDirectTripsLive);
+  }
+}
+
+function syncTripLiveStatusDom(trip) {
+  const pill = document.querySelector(`[data-live-pill-for="${trip.id}"]`);
+  const note = document.querySelector(`[data-live-note-for="${trip.id}"]`);
+  if (pill) {
+    pill.className = `live-status-pill is-${trip.live_status || "idle"}`;
+    pill.textContent = trip.live_status_label || "Non verifie";
+  }
+  if (note) {
+    note.textContent = trip.live_status_reason || "";
+  }
+}
+
+function groupDirectTripsByDestination(payload) {
+  const destinationMeta = new Map((payload.destinations || []).map((item) => [item.destination, item]));
+  const groups = new Map();
+
+  currentDirectTrips.forEach((trip) => {
+    if (!groups.has(trip.destination)) {
+      groups.set(trip.destination, {
+        destination: trip.destination,
+        origin: trip.origin,
+        resultKey: makeResultKey("direct", trip.destination),
+        destinationMeta: destinationMeta.get(trip.destination) || null,
+        trips: [],
+      });
+    }
+    groups.get(trip.destination).trips.push(trip);
+  });
+
+  const orderedDestinations = (payload.destinations || []).map((item) => item.destination);
+  const destinationIndex = new Map(orderedDestinations.map((name, index) => [name, index]));
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      trips: group.trips.sort((left, right) => {
+        if (left.departure_time !== right.departure_time) {
+          return left.departure_time.localeCompare(right.departure_time);
+        }
+        return left.arrival_time.localeCompare(right.arrival_time);
+      }),
+    }))
+    .sort((left, right) => {
+      const leftIndex = destinationIndex.get(left.destination) ?? Number.MAX_SAFE_INTEGER;
+      const rightIndex = destinationIndex.get(right.destination) ?? Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
+      return left.destination.localeCompare(right.destination);
+    });
+}
+
+function renderDirectOption(trip) {
+  return `
+    <section class="direct-option" data-trip-id="${escapeAttribute(trip.id)}">
+      <div class="direct-option-head">
+        <div>
+          <h4>${escapeHtml(trip.departure_time)} -> ${escapeHtml(trip.arrival_time)}</h4>
+          <p class="muted">Train ${escapeHtml(trip.train_no || "n/a")}</p>
+        </div>
+        <a class="result-link" href="${escapeHtml(trip.booking_url)}" title="Ouvrir ce trajet sur SNCF Connect">Ouvrir sur SNCF Connect</a>
+      </div>
+      <div class="result-meta">
+        <span class="result-pill">${escapeHtml(trip.duration_label)}</span>
+      </div>
+      ${liveStatusMarkup(trip)}
+      ${renderReturnOptions(trip)}
+    </section>
+  `;
+}
+
+function buildDirectMapModel(trips, activeKey = null) {
+  const originStations = uniqueStationPoints(
+    trips.map((trip) => ({
+      name: trip.origin,
+      coordinates: trip.coordinates?.origin,
+    }))
+  );
+  const visibleTrips = trips.filter((trip) => trip.live_status !== "unavailable");
+  const baseRoutes = [];
+  const routesByKey = {};
+  const points = [];
+  const groupedDestinations = new Map();
+
+  originStations.forEach((originStation) => {
+    points.push({
+      name: originStation.name,
+      detail: "Point de depart",
+      coordinates: originStation.coordinates,
+      kind: "origin",
+      selectable: false,
+    });
+  });
+
+  visibleTrips.forEach((trip) => {
+    if (!trip.destination) {
+      return;
+    }
+
+    if (!groupedDestinations.has(trip.destination)) {
+      groupedDestinations.set(trip.destination, {
+        coordinates: trip.coordinates?.destination || null,
+        trips: [],
+      });
+    }
+
+    const destinationGroup = groupedDestinations.get(trip.destination);
+    if (!destinationGroup.coordinates && trip.coordinates?.destination) {
+      destinationGroup.coordinates = trip.coordinates.destination;
+    }
+    destinationGroup.trips.push(trip);
+  });
+
+  groupedDestinations.forEach((destinationGroup, destinationName) => {
+    const resultKey = makeResultKey("direct", destinationName);
+
+    points.push({
+      key: resultKey,
+      name: destinationName,
+      detail: `${destinationGroup.trips.length} train(s) direct(s)`,
+      coordinates: destinationGroup.coordinates,
+      kind: "destination",
+    });
+
+    const destinationRoutes = destinationGroup.trips
+      .map((trip) => makeStraightRoute(trip.coordinates?.origin, trip.coordinates?.destination))
+      .filter(Boolean);
+
+    destinationRoutes.forEach((route) => {
+      baseRoutes.push({
+        route,
+        color: "#9fc0ff",
+        weight: 5,
+        opacity: 0.22,
+      });
+    });
+
+    if (destinationRoutes.length) {
+      routesByKey[resultKey] = destinationRoutes.map((route) => ({
+        route,
+        color: "#4782ee",
+        weight: 6,
+        opacity: 0.9,
+      }));
+    }
+  });
+
+  const availableKeys = points.filter((point) => point.key).map((point) => point.key);
+  const nextActiveKey = availableKeys.includes(activeKey) ? activeKey : availableKeys[0] || null;
+
+  return {
+    points,
+    baseRoutes,
+    routesByKey,
+    activeKey: nextActiveKey,
+    legend: PAGE_LEGENDS.direct,
+  };
+}
+
+function applyLiveStatuses(payload) {
+  const statuses = payload.results || [];
+  currentLiveSummary = payload.summary
+    ? {
+        ...payload.summary,
+        verified_count: payload.verified_count || statuses.length,
+        limit: payload.limit || DIRECT_LIVE_LIMIT,
+      }
+    : null;
+
+  const statusesByTripId = new Map(statuses.map((item) => [item.trip_id, item]));
+  currentDirectTrips = currentDirectTrips.map((trip, index) => {
+    const liveStatus = statusesByTripId.get(trip.id);
+    if (liveStatus) {
+      return {
+        ...trip,
+        live_status: liveStatus.status,
+        live_status_label: liveStatus.label,
+        live_status_reason: liveStatus.reason,
+      };
+    }
+    if (index >= (payload.limit || DIRECT_LIVE_LIMIT)) {
+      return {
+        ...trip,
+        live_status: "skipped",
+        live_status_label: "Non controle",
+        live_status_reason: `Train non verifie dans ce lot live (limite ${payload.limit || DIRECT_LIVE_LIMIT}).`,
+      };
+    }
+    return trip;
+  });
+
+  currentDirectTrips.forEach(syncTripLiveStatusDom);
+
+  updateResultActions();
+  renderMapModel(buildDirectMapModel(currentDirectTrips, currentMapModel?.activeKey), {
+    focusSelection: false,
+    scrollSelection: false,
+  });
+}
+
+async function verifyDirectTripsLive() {
+  if (!currentDirectTrips.length) {
+    return;
+  }
+
+  const button = document.getElementById("verify-live-button");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Verification...";
+  }
+
+  try {
+    const response = await fetch("/api/direct/live", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: DIRECT_LIVE_LIMIT,
+        trips: currentDirectTrips.slice(0, DIRECT_LIVE_LIMIT).map((trip) => ({
+          id: trip.id,
+          booking_url: trip.booking_url,
+        })),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "Verification live impossible");
+    }
+    applyLiveStatuses(payload);
+  } catch (error) {
+    currentLiveSummary = null;
+    updateResultActions();
+    if (button) {
+      button.textContent = "Reessayer";
+    }
+    window.alert(error.message);
+  } finally {
+    const currentButton = document.getElementById("verify-live-button");
+    if (currentButton) {
+      currentButton.disabled = false;
+      currentButton.textContent = "Verifier maintenant";
+    }
+  }
+}
+
 function renderReturnOptions(trip) {
   const options = trip.return_options;
   if (!options) {
@@ -400,19 +727,18 @@ function renderReturnOptions(trip) {
     `;
   }
 
-  const summary = options.requested_return_date
-    ? `Retours a 0 EUR le ${formatFrenchDate(options.requested_return_date)}`
-    : `Voir les retours a 0 EUR (${options.total_dates} date(s))`;
-
   const heading = options.requested_return_date
-    ? `Retours disponibles (${trip.destination} -> ${trip.origin})`
-    : `Dates retour possibles (${trip.destination} -> ${trip.origin})`;
+    ? `Retours a 0 EUR a partir du ${formatFrenchDate(options.requested_return_date)}`
+    : `Retours a 0 EUR les plus proches (${options.total_dates} date(s))`;
+  const hint = options.total_dates > options.available_dates.length
+    ? `Apercu des ${options.available_dates.length} prochaines dates retour.`
+    : `${options.total_trips} train(s) retour a 0 EUR repere(s).`;
 
   return `
-    <details class="return-panel">
-      <summary>${escapeHtml(summary)}</summary>
-      <div class="return-panel-body">
+    <div class="return-panel">
+      <div class="return-panel-body is-static">
         <h4>${escapeHtml(heading)}</h4>
+        <p class="live-status-note">${escapeHtml(hint)}</p>
         <div class="return-date-list">
           ${options.available_dates
             .map(
@@ -437,15 +763,19 @@ function renderReturnOptions(trip) {
             .join("")}
         </div>
       </div>
-    </details>
+    </div>
   `;
 }
 
 function renderDirect(payload) {
+  currentDirectTrips = payload.trips || [];
+  currentLiveSummary = null;
+  updateResultActions();
+
   const returnSummary = payload.return_date
-    ? ` | retours filtres au ${formatFrenchDate(payload.return_date)}`
+    ? ` | retours proposes a partir du ${formatFrenchDate(payload.return_date)}`
     : " | retours proposes sur les dates disponibles";
-  resultSummary.textContent = `${payload.trip_count} trains a 0 EUR depuis ${payload.matched_origins.join(", ")}${returnSummary}`;
+  resultSummary.textContent = `${payload.destinations.length} destination(s) | ${payload.trip_count} train(s) a 0 EUR depuis ${payload.matched_origins.join(", ")}${returnSummary}`;
 
   if (!payload.trips.length) {
     resultsContainer.innerHTML = emptyState("Aucun train a 0 EUR trouve pour ce depart et cette date.");
@@ -453,23 +783,37 @@ function renderDirect(payload) {
     return;
   }
 
-  resultsContainer.innerHTML = payload.trips
-    .map((trip) => {
-      const resultKey = makeResultKey("direct", trip.destination);
+  const directGroups = groupDirectTripsByDestination(payload);
+
+  resultsContainer.innerHTML = directGroups
+    .map((group) => {
+      const firstTrip = group.trips[0];
+      const summary = group.trips.length > 1
+        ? `${group.trips.length} creneaux a 0 EUR ce jour`
+        : "1 train a 0 EUR ce jour";
       return `
-        <article class="result-item" data-result-key="${resultKey}">
+        <article class="result-item" data-result-key="${group.resultKey}">
           <div class="result-item-head">
             <div>
-              <h3>${escapeHtml(trip.origin)} -> ${escapeHtml(trip.destination)}</h3>
-              <p class="muted">${escapeHtml(trip.departure_time)} -> ${escapeHtml(trip.arrival_time)}</p>
+              <h3>${escapeHtml(firstTrip.origin)} -> ${escapeHtml(group.destination)}</h3>
+              <p class="muted">${escapeHtml(summary)}</p>
             </div>
-            <a class="result-link" href="${escapeHtml(trip.booking_url)}" title="Ouvrir ce trajet sur SNCF Connect">Ouvrir sur SNCF Connect</a>
           </div>
-          <div class="result-meta">
-            <span class="result-pill">${escapeHtml(trip.duration_label)}</span>
-            <span class="result-pill">Train ${escapeHtml(trip.train_no || "n/a")}</span>
+          <div class="direct-time-chip-list">
+            ${group.trips
+              .map(
+                (trip) => `
+                  <a class="direct-time-chip" href="${escapeHtml(trip.booking_url)}" title="Ouvrir ce trajet sur SNCF Connect">
+                    <span>${escapeHtml(trip.departure_time)}</span>
+                    <small>${escapeHtml(trip.arrival_time)}</small>
+                  </a>
+                `
+              )
+              .join("")}
           </div>
-          ${renderReturnOptions(trip)}
+          <div class="direct-option-list">
+            ${group.trips.map((trip) => renderDirectOption(trip)).join("")}
+          </div>
         </article>
       `;
     })
@@ -477,59 +821,8 @@ function renderDirect(payload) {
 
   bindSelectableCards();
 
-  const originCoordinates = payload.trips.find((trip) => trip.coordinates?.origin)?.coordinates?.origin || null;
-  const matchedOrigin = payload.matched_origins[0] || payload.origin_query;
-  const baseRoutes = [];
-  const routesByKey = {};
-  const points = [];
-
-  if (originCoordinates) {
-    points.push({
-      name: matchedOrigin,
-      detail: "Point de depart",
-      coordinates: originCoordinates,
-      kind: "origin",
-      selectable: false,
-    });
-  }
-
-  payload.destinations.forEach((destination) => {
-    const resultKey = makeResultKey("direct", destination.destination);
-    const route = makeStraightRoute(originCoordinates, destination.coordinates);
-
-    points.push({
-      key: resultKey,
-      name: destination.destination,
-      detail: `${destination.trip_count} train(s) direct(s)`,
-      coordinates: destination.coordinates,
-      kind: "destination",
-    });
-
-    if (route) {
-      baseRoutes.push({
-        route,
-        color: "#9fc0ff",
-        weight: 5,
-        opacity: 0.22,
-      });
-      routesByKey[resultKey] = {
-        route,
-        color: "#4782ee",
-        weight: 6,
-        opacity: 0.9,
-      };
-    }
-  });
-
-  const firstKey = payload.destinations[0] ? makeResultKey("direct", payload.destinations[0].destination) : null;
   renderMapModel(
-    {
-      points,
-      baseRoutes,
-      routesByKey,
-      activeKey: firstKey,
-      legend: PAGE_LEGENDS.direct,
-    },
+    buildDirectMapModel(currentDirectTrips),
     {
       focusSelection: false,
       scrollSelection: false,
@@ -538,6 +831,10 @@ function renderDirect(payload) {
 }
 
 function renderDayTrips(payload) {
+  currentDirectTrips = [];
+  currentLiveSummary = null;
+  updateResultActions();
+
   const sameDayReturn = payload.return_date === payload.travel_date;
   resultSummary.textContent = sameDayReturn
     ? `${payload.results.length} destination(s) faisables en aller-retour journee.`
@@ -567,25 +864,29 @@ function renderDayTrips(payload) {
 
   bindSelectableCards();
 
-  const originCoordinates = payload.results.find((item) => item.outbound.coordinates?.origin)?.outbound.coordinates?.origin || null;
-  const matchedOrigin = payload.matched_origins[0] || payload.origin_query;
+  const originStations = uniqueStationPoints(
+    payload.results.map((item) => ({
+      name: item.outbound.origin,
+      coordinates: item.outbound.coordinates?.origin,
+    }))
+  );
   const baseRoutes = [];
   const routesByKey = {};
   const points = [];
 
-  if (originCoordinates) {
+  originStations.forEach((originStation) => {
     points.push({
-      name: matchedOrigin,
+      name: originStation.name,
       detail: "Point de depart",
-      coordinates: originCoordinates,
+      coordinates: originStation.coordinates,
       kind: "origin",
       selectable: false,
     });
-  }
+  });
 
   payload.results.forEach((item) => {
     const resultKey = makeResultKey("day-trip", item.destination);
-    const route = makeStraightRoute(originCoordinates, item.coordinates);
+    const route = makeStraightRoute(item.outbound.coordinates?.origin, item.coordinates);
 
     points.push({
       key: resultKey,
@@ -629,36 +930,75 @@ function renderDayTrips(payload) {
 
 function routeCard(group) {
   const best = group.itineraries[0];
+  const bestTravelMinutes = totalTravelMinutes(best.segments);
   return `
     <article class="result-item" data-result-key="${group.resultKey}">
       <h3>${escapeHtml(group.destination)}</h3>
-      <p class="muted">Meilleur parcours ${escapeHtml(best.departure_time)} -> ${escapeHtml(best.arrival_time)}</p>
+      <p class="muted">Premier parcours propose ${escapeHtml(best.departure_time)} -> ${escapeHtml(best.arrival_time)}</p>
       <div class="result-meta">
         <span class="route-swatch" style="--route-color: ${group.color};"></span>
-        <span class="result-pill">${escapeHtml(best.duration_label)}</span>
+        <span class="result-pill">Duree totale ${escapeHtml(best.duration_label)}</span>
+        <span class="result-pill">Temps en train ${escapeHtml(formatDuration(bestTravelMinutes))}</span>
         <span class="result-pill">${best.connections} correspondance(s)</span>
-        <button class="result-pill show-route-button" data-result-key="${group.resultKey}">Tracer</button>
       </div>
-      <div class="segment-list">
-        ${best.segments
-          .map(
-            (segment) => `
-              <div class="segment">
-                <div>
-                  <strong>${escapeHtml(segment.origin)} -> ${escapeHtml(segment.destination)}</strong>
-                  <span class="muted">Train ${escapeHtml(segment.train_no || "n/a")}</span>
+      <div class="segment-list route-option-list">
+        ${group.itineraries
+          .map((itinerary, index) => {
+            const travelMinutes = totalTravelMinutes(itinerary.segments);
+            return `
+              <div class="route-option">
+                <div class="result-item-head">
+                  <div>
+                    <strong>Parcours ${index + 1} ${escapeHtml(itinerary.departure_time)} -> ${escapeHtml(itinerary.arrival_time)}</strong>
+                    <p class="muted">Duree totale ${escapeHtml(itinerary.duration_label)} | Temps en train ${escapeHtml(formatDuration(travelMinutes))}</p>
+                  </div>
+                  <button class="result-pill show-route-button" data-result-key="${routeOptionKey(group.destination, index)}">Tracer</button>
                 </div>
-                <div>${escapeHtml(segment.departure_time)} -> ${escapeHtml(segment.arrival_time)}</div>
+                <div class="result-meta">
+                  <span class="result-pill">${itinerary.connections} correspondance(s)</span>
+                </div>
+                <div class="segment-list">
+                  ${itinerary.segments
+                    .map(
+                      (segment) => `
+                        <div class="segment">
+                          <div>
+                            <strong>${escapeHtml(segment.origin)} -> ${escapeHtml(segment.destination)}</strong>
+                            <span class="muted">Train ${escapeHtml(segment.train_no || "n/a")}</span>
+                          </div>
+                          <div>${escapeHtml(segment.departure_time)} -> ${escapeHtml(segment.arrival_time)}</div>
+                        </div>
+                      `
+                    )
+                    .join("")}
+                </div>
               </div>
-            `
-          )
+            `;
+          })
           .join("")}
       </div>
     </article>
   `;
 }
 
+function formatDuration(totalMinutes) {
+  const safeMinutes = Math.max(0, Number(totalMinutes || 0));
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
+  if (hours === 0) {
+    return `${minutes} min`;
+  }
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h${String(minutes).padStart(2, "0")}`;
+}
+
 function renderRoutes(payload) {
+  currentDirectTrips = [];
+  currentLiveSummary = null;
+  updateResultActions();
+
   resultSummary.textContent = `${payload.results.length} destination(s) accessibles avec correspondances MAX. Clique une destination ou un point de la carte pour tracer un seul chemin proprement.`;
 
   if (!payload.results.length) {
@@ -685,25 +1025,29 @@ function renderRoutes(payload) {
   });
 
   const points = [];
-  const firstOrigin = routeGroups[0]?.route?.segments?.[0]?.coordinates?.origin || null;
-  const matchedOrigin = payload.matched_origins[0] || payload.origin_query;
+  const originStations = uniqueStationPoints(
+    routeGroups.map((group) => ({
+      name: group.route?.origin,
+      coordinates: group.route?.segments?.[0]?.coordinates?.origin,
+    }))
+  );
 
-  if (firstOrigin) {
+  originStations.forEach((originStation) => {
     points.push({
-      name: matchedOrigin,
+      name: originStation.name,
       detail: "Point de depart",
-      coordinates: firstOrigin,
+      coordinates: originStation.coordinates,
       kind: "origin",
       selectable: false,
     });
-  }
+  });
 
   const routesByKey = {};
   routeGroups.forEach((group) => {
     points.push({
       key: group.resultKey,
       name: group.destination,
-      detail: `${group.itineraries[0].duration_label} - ${group.itineraries[0].connections} correspondance(s)`,
+      detail: `Duree totale ${group.itineraries[0].duration_label} - ${group.itineraries[0].connections} correspondance(s)`,
       coordinates: group.coordinates,
       kind: "destination",
     });
@@ -714,6 +1058,14 @@ function renderRoutes(payload) {
       weight: 6,
       opacity: 0.92,
     };
+    group.itineraries.forEach((itinerary, index) => {
+      routesByKey[routeOptionKey(group.destination, index)] = {
+        route: itinerary,
+        color: group.color,
+        weight: 6,
+        opacity: 0.92,
+      };
+    });
   });
 
   renderMapModel(
@@ -735,10 +1087,14 @@ function buildHybridSelectionKey(item) {
 }
 
 function renderHybrid(payload) {
+  currentDirectTrips = [];
+  currentLiveSummary = null;
+  updateResultActions();
+
   if (!payload.enabled) {
     resultSummary.textContent = payload.reason || "Mode hybride indisponible.";
     resultsContainer.innerHTML = emptyState(
-      `${payload.reason || "Mode hybride indisponible."} Ajoute SNCF_API_TOKEN dans l'environnement du serveur puis relance l'application.`
+      `${payload.reason || "Mode hybride indisponible."} Verifie la presence du GTFS SNCF ouvert cote serveur puis relance l'application.`
     );
     renderMapModel({ points: [], legend: PAGE_LEGENDS.hybrid }, { focusSelection: false, scrollSelection: false });
     return;
@@ -746,7 +1102,7 @@ function renderHybrid(payload) {
 
   resultSummary.textContent = `${payload.results.length} prolongement(s) hybride(s) trouves.`;
   if (!payload.results.length) {
-    resultsContainer.innerHTML = emptyState("Aucun prolongement MAX + TER trouve pour cette destination.");
+    resultsContainer.innerHTML = emptyState("Aucun prolongement ferroviaire n'a ete trouve depuis les gares atteignables en MAX.");
     renderMapModel({ points: [], legend: PAGE_LEGENDS.hybrid }, { focusSelection: false, scrollSelection: false });
     return;
   }
@@ -760,6 +1116,7 @@ function renderHybrid(payload) {
           <p class="muted">MAX ${escapeHtml(item.max_itinerary.departure_time)} -> ${escapeHtml(item.max_itinerary.arrival_time)} puis TER ${escapeHtml(item.ter_extension.departure_time)} -> ${escapeHtml(item.ter_extension.arrival_time)}</p>
           <div class="result-meta">
             <span class="result-pill">Total ${escapeHtml(item.total_duration_label)}</span>
+            ${item.direct_max_available ? '<span class="result-pill">Aussi en MAX direct</span>' : ""}
           </div>
           <div class="segment-list">
             ${item.max_itinerary.segments
@@ -774,6 +1131,19 @@ function renderHybrid(payload) {
                 `
               )
               .join("")}
+            ${
+              item.direct_max_available && item.direct_max_trip
+                ? `
+                  <div class="segment">
+                    <div>
+                      <strong>${escapeHtml(item.direct_max_trip.origin)} -> ${escapeHtml(item.direct_max_trip.destination)}</strong>
+                      <span class="muted">Accessible aussi en MAX direct</span>
+                    </div>
+                    <div>${escapeHtml(item.direct_max_trip.departure_time)} -> ${escapeHtml(item.direct_max_trip.arrival_time)}</div>
+                  </div>
+                `
+                : ""
+            }
             ${item.ter_extension.sections
               .map(
                 (section) => `
@@ -797,18 +1167,20 @@ function renderHybrid(payload) {
   const points = [];
   const routesByKey = {};
   const seenPointKeys = new Set();
-  const firstOrigin = payload.results[0]?.max_itinerary?.segments?.[0]?.coordinates?.origin || null;
-  const firstOriginLabel = payload.results[0]?.max_itinerary?.origin || "";
-
-  if (firstOrigin) {
+  uniqueStationPoints(
+    payload.results.map((item) => ({
+      name: item.max_itinerary?.origin,
+      coordinates: item.max_itinerary?.segments?.[0]?.coordinates?.origin,
+    }))
+  ).forEach((originStation) => {
     points.push({
-      name: firstOriginLabel,
+      name: originStation.name,
       detail: "Point de depart",
-      coordinates: firstOrigin,
+      coordinates: originStation.coordinates,
       kind: "origin",
       selectable: false,
     });
-  }
+  });
 
   payload.results.forEach((item) => {
     const resultKey = buildHybridSelectionKey(item);
@@ -828,14 +1200,17 @@ function renderHybrid(payload) {
       });
     }
 
-    if (targetCoordinates && !seenPointKeys.has(`target-${targetCoordinates.latitude}-${targetCoordinates.longitude}`)) {
-      seenPointKeys.add(`target-${targetCoordinates.latitude}-${targetCoordinates.longitude}`);
+    const targetPointIdentity = `target-${resultKey}-${targetCoordinates?.latitude}-${targetCoordinates?.longitude}`;
+    if (targetCoordinates && !seenPointKeys.has(targetPointIdentity)) {
+      seenPointKeys.add(targetPointIdentity);
       points.push({
+        key: resultKey,
         name: item.destination,
-        detail: "Destination finale",
+        detail: item.direct_max_available
+          ? `Accessible depuis ${item.via_max_station} et aussi en MAX direct`
+          : `Accessible depuis ${item.via_max_station}`,
         coordinates: targetCoordinates,
         kind: "target",
-        selectable: false,
       });
     }
 
@@ -904,18 +1279,9 @@ async function loadCurrentPage() {
 
     if (page.key === "hybrid") {
       if (!meta.hybrid_enabled) {
-        resultSummary.textContent = "Mode indisponible : la cle SNCF_API_TOKEN manque cote serveur.";
+        resultSummary.textContent = "Mode indisponible : le GTFS SNCF ouvert manque cote serveur.";
         resultsContainer.innerHTML = emptyState(
-          "Le calcul MAX + TER a besoin d'une cle API SNCF/Navitia cote serveur. Ajoute SNCF_API_TOKEN puis relance l'application."
-        );
-        renderMapModel({ points: [], legend: PAGE_LEGENDS.hybrid }, { focusSelection: false, scrollSelection: false });
-        return;
-      }
-
-      if (!values.destination) {
-        resultSummary.textContent = "Renseigne une destination finale apres le segment MAX.";
-        resultsContainer.innerHTML = emptyState(
-          "Exemple : si MAX t'emmene a Annecy et que tu veux finir a Chamonix, la destination finale a saisir est Chamonix-Mont-Blanc."
+          "Le calcul MAX + TER automatique a besoin du GTFS SNCF ouvert charge cote serveur."
         );
         renderMapModel({ points: [], legend: PAGE_LEGENDS.hybrid }, { focusSelection: false, scrollSelection: false });
         return;
@@ -989,6 +1355,8 @@ async function refreshData() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
+  renderMapLegend(PAGE_LEGENDS[page.key] || []);
+  updateResultActions();
   setDefaultInputs();
   syncUrlAndNav();
   loadCurrentPage();
@@ -1007,6 +1375,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   searchForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    loadCurrentPage();
+  });
+
+  exploreButton.addEventListener("click", () => {
     loadCurrentPage();
   });
 
