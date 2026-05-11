@@ -56,6 +56,7 @@ uv run pytest
 - Le dataset `tgvmax` est annonce par SNCF Open Data comme mis a jour tous les jours en debut de matinee.
 - Les prolongements `MAX + TER` dependent du zip GTFS SNCF ouvert telecharge cote serveur.
 - La carte s'appuie sur Leaflet et des tuiles OpenStreetMap.
+- La vue directe affiche le dataset SNCF tel qu'il a ete charge cote application, avec un indicateur de fraicheur base sur `generated_at`.
 
 ## Suivre les changements de trains a 0 EUR
 

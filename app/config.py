@@ -31,9 +31,6 @@ class Settings:
     )
     sncf_api_token: str | None = os.getenv("SNCF_API_TOKEN")
     max_itinerary_results: int = int(os.getenv("MAX_EXPLORER_MAX_RESULTS", "40"))
-    live_check_timeout_seconds: int = int(os.getenv("MAX_EXPLORER_LIVE_CHECK_TIMEOUT", "20"))
-    live_check_cache_minutes: int = int(os.getenv("MAX_EXPLORER_LIVE_CHECK_CACHE_MINUTES", "10"))
-    live_check_default_limit: int = int(os.getenv("MAX_EXPLORER_LIVE_CHECK_LIMIT", "20"))
 
     @property
     def cache_dir(self) -> Path:

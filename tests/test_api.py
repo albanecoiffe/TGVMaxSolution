@@ -103,58 +103,10 @@ def test_hybrid_endpoint_is_disabled_without_token_or_open_gtfs(tmp_path):
     assert response.json()["enabled"] is False
 
 
-class FakeLiveVerifier:
-    def verify_trips(self, trips, limit=None):
-        return {
-            "verified_count": len(trips),
-            "limit": limit or len(trips),
-            "cache_minutes": 10,
-            "results": [
-                {
-                    "trip_id": trip["id"],
-                    "booking_url": trip["booking_url"],
-                    "checked_at": "2026-05-10T07:00:00",
-                    "status": "blocked",
-                    "label": "Bloque par le site",
-                    "reason": "anti-bot",
-                    "source": "sncf_connect_html",
-                }
-                for trip in trips
-            ],
-            "summary": {
-                "confirmed_zero": 0,
-                "unavailable": 0,
-                "blocked": len(trips),
-                "unknown": 0,
-                "error": 0,
-            },
-        }
-
-
-def test_direct_live_endpoint_returns_live_statuses(settings):
-    client = TestClient(create_app(settings, live_verifier=FakeLiveVerifier()))
-    response = client.post(
-        "/api/direct/live",
-        json={
-            "limit": 2,
-            "trips": [
-                {
-                    "id": "trip-1",
-                    "booking_url": "https://www.sncf-connect.com/home/search?userInput=test",
-                }
-            ],
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["verified_count"] == 1
-    assert payload["results"][0]["status"] == "blocked"
-
-
 def test_section_pages_render(settings):
     client = TestClient(create_app(settings))
     routes = [
-        ("/", "Dataset SNCF puis verification live"),
+        ("/", "Dataset SNCF tgvmax"),
         ("/aller-retour-journee", "Aller-retour journee"),
         ("/correspondances-max", "Correspondances MAX"),
         ("/max-ter", "MAX + TER"),

@@ -6,10 +6,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.services.live_availability import LiveAvailabilityVerifier
 from app.services.planner import TravelPlanner
 
 
@@ -19,10 +17,10 @@ PAGES = {
         "path": "/",
         "label": "Trains a 0 EUR du jour",
         "hero_title": "Voir les trajets MAX marques a 0 EUR dans le dataset SNCF.",
-        "hero_text": "Cette vue affiche d'abord les trajets signales a 0 EUR dans le dataset SNCF Open Data, puis permet de verifier leur disponibilite actuelle sur SNCF Connect.",
+        "hero_text": "Cette vue affiche les trajets signales a 0 EUR dans le dataset SNCF Open Data et indique quand ce dataset a ete vu et recharge cote application.",
         "map_help": "Destinations directes disponibles a 0 EUR depuis le point de depart.",
-        "result_title": "Dataset SNCF puis verification live",
-        "result_help": "Les trajets listes proviennent du dataset SNCF `tgvmax`. Le controle live les qualifie ensuite.",
+        "result_title": "Dataset SNCF tgvmax",
+        "result_help": "Les trajets listes proviennent du dataset SNCF `tgvmax`.",
         "fields": ["origin", "date", "return_date"],
     },
     "day_trips": {
@@ -75,16 +73,6 @@ PAGES = {
 }
 
 
-class DirectLiveTripRequest(BaseModel):
-    id: str = Field(min_length=1)
-    booking_url: str = Field(min_length=1)
-
-
-class DirectLiveCheckRequest(BaseModel):
-    trips: list[DirectLiveTripRequest] = Field(default_factory=list)
-    limit: int | None = Field(default=None, ge=1, le=50)
-
-
 def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> dict:
     meta = planner.meta()
     filters = {
@@ -108,16 +96,13 @@ def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> di
 
 def create_app(
     settings: Settings | None = None,
-    live_verifier: LiveAvailabilityVerifier | None = None,
 ) -> FastAPI:
     app_settings = settings or Settings()
     planner = TravelPlanner(app_settings)
-    verifier = live_verifier or LiveAvailabilityVerifier(app_settings)
 
     app = FastAPI(title=app_settings.app_name)
     app.state.settings = app_settings
     app.state.planner = planner
-    app.state.live_verifier = verifier
 
     templates = Jinja2Templates(directory=str(app_settings.templates_dir))
     app.mount("/static", StaticFiles(directory=str(app_settings.static_dir)), name="static")
@@ -159,36 +144,17 @@ def create_app(
         origin: str,
         travel_date: date = Query(alias="date"),
         return_date: date | None = Query(default=None, alias="return_date"),
+        include_returns: bool = True,
     ):
         try:
             return planner.direct_trips(
                 origin_query=origin,
                 travel_date=travel_date,
                 return_date=return_date,
+                include_returns=include_returns,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    @app.post("/api/direct/live")
-    def direct_live_check(payload: DirectLiveCheckRequest):
-        if not payload.trips:
-            return {
-                "verified_count": 0,
-                "limit": payload.limit or app_settings.live_check_default_limit,
-                "cache_minutes": app_settings.live_check_cache_minutes,
-                "results": [],
-                "summary": {
-                    "confirmed_zero": 0,
-                    "unavailable": 0,
-                    "blocked": 0,
-                    "unknown": 0,
-                    "error": 0,
-                },
-            }
-        return verifier.verify_trips(
-            trips=[trip.model_dump() for trip in payload.trips],
-            limit=payload.limit,
-        )
 
     @app.get("/api/day-trips")
     def day_trips(

@@ -56,7 +56,6 @@ class TravelPlanner:
             "date_min": available_dates[0] if available_dates else None,
             "date_max": available_dates[-1] if available_dates else None,
             "mountain_destinations": self._mountains,
-            "live_check_default_limit": self.settings.live_check_default_limit,
             "generated_at": bundle.generated_at.isoformat(),
         }
 
@@ -93,6 +92,7 @@ class TravelPlanner:
         origin_query: str,
         travel_date: date,
         return_date: date | None = None,
+        include_returns: bool = True,
     ) -> dict:
         bundle = self.repository.get_bundle()
         matched_origins = self._resolve_station_query(bundle, origin_query)
@@ -105,13 +105,14 @@ class TravelPlanner:
         trips = []
         for row in direct.itertuples(index=False):
             trip_payload = self._serialize_trip(bundle, row)
-            trip_payload["return_options"] = self._build_return_options(
-                bundle=bundle,
-                origin_name=row.destination,
-                destination_names=matched_origins,
-                earliest_departure=row.arrive_dt,
-                return_date=return_date,
-            )
+            if include_returns:
+                trip_payload["return_options"] = self._build_return_options(
+                    bundle=bundle,
+                    origin_name=row.destination,
+                    destination_names=matched_origins,
+                    earliest_departure=row.arrive_dt,
+                    return_date=return_date,
+                )
             trips.append(trip_payload)
         destinations = self._group_destinations(bundle, direct)
         return {
@@ -119,6 +120,7 @@ class TravelPlanner:
             "matched_origins": matched_origins,
             "travel_date": travel_date.isoformat(),
             "return_date": return_date.isoformat() if return_date else None,
+            "includes_return_options": include_returns,
             "trip_count": len(trips),
             "trips": trips,
             "destinations": destinations,
@@ -471,30 +473,32 @@ class TravelPlanner:
     def _resolve_station(self, bundle: DataBundle, name: str) -> StationRecord | None:
         if name in bundle.stations:
             return bundle.stations[name]
-        name_norm = normalize_text(name)
         name_aliases = self._station_name_aliases(name)
-        exact_match = next(
-            (
-                station
-                for station_name, station in bundle.stations.items()
-                if self._station_name_aliases(station_name) & name_aliases
-            ),
-            None,
-        )
-        if exact_match is not None:
-            return exact_match
-        contains_matches = [
-            station
-            for station_name, station in bundle.stations.items()
-            if name_norm
-            and any(
-                alias in station_alias
-                for alias in name_aliases
-                for station_alias in self._station_name_aliases(station_name)
-            )
-        ]
-        if len(contains_matches) == 1:
-            return contains_matches[0]
+        best_station: StationRecord | None = None
+        best_score = 0
+        best_name_length = 10**9
+
+        for station_name, station in bundle.stations.items():
+            score = self._station_match_score(name_aliases, self._station_name_aliases(station_name))
+            if score <= 0:
+                continue
+            candidate_name_length = len(normalize_text(station_name))
+            if (
+                score > best_score
+                or (score == best_score and candidate_name_length < best_name_length)
+                or (
+                    score == best_score
+                    and candidate_name_length == best_name_length
+                    and best_station is not None
+                    and station.name < best_station.name
+                )
+            ):
+                best_station = station
+                best_score = score
+                best_name_length = candidate_name_length
+
+        if best_score >= 60:
+            return best_station
         return None
 
     @staticmethod
@@ -504,10 +508,33 @@ class TravelPlanner:
             return set()
 
         aliases = {normalized}
-        saint_variant = re.sub(r"\bST\b", "SAINT", normalized)
-        sainte_variant = re.sub(r"\bSTE\b", "SAINTE", saint_variant)
-        aliases.add(sainte_variant)
+        expanded_aliases = set()
+        for alias in list(aliases):
+            saint_variant = re.sub(r"\bST\b", "SAINT", alias)
+            sainte_variant = re.sub(r"\bSTE\b", "SAINTE", saint_variant)
+            expanded_aliases.update({saint_variant, sainte_variant})
+        aliases.update(expanded_aliases)
+
+        normalized_variants = set()
+        for alias in list(aliases):
+            normalized_variants.add(re.sub(r"\bPRES\b", "LES", alias))
+            normalized_variants.add(re.sub(r"\bLES\b", "PRES", alias))
+            normalized_variants.add(re.sub(r"\bVILLE\b", "", alias).strip())
+            normalized_variants.add(re.sub(r"\bGARE\b", "", alias).strip())
+        aliases.update({re.sub(r"\s+", " ", alias).strip() for alias in normalized_variants if alias.strip()})
         return aliases
+
+    @staticmethod
+    def _station_match_score(query_aliases: set[str], station_aliases: set[str]) -> int:
+        best_score = 0
+        for query_alias in query_aliases:
+            for station_alias in station_aliases:
+                best_score = max(
+                    best_score,
+                    match_score(station_alias, query_alias),
+                    match_score(query_alias, station_alias),
+                )
+        return best_score
 
     def _hybrid_enabled(self, bundle: DataBundle) -> bool:
         return self._local_rail_enabled(bundle)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from app.models import StationRecord
 from tests.conftest import TGVMAX_SAMPLE
 
 
@@ -105,6 +106,36 @@ def test_station_coordinates_match_st_abbreviation(planner):
     assert bordeaux is not None
     assert round(bordeaux["latitude"], 4) == 44.8253
     assert round(bordeaux["longitude"], 4) == -0.5562
+
+
+def test_station_resolution_can_strip_ville_and_normalize_pres(planner):
+    bundle = planner.repository.get_bundle()
+    bundle.stations["Dijon"] = StationRecord(name="Dijon", latitude=47.32337, longitude=5.027208)
+    bundle.stations["Metz"] = StationRecord(name="Metz", latitude=49.1099, longitude=6.1778)
+    bundle.stations["Mulhouse"] = StationRecord(name="Mulhouse", latitude=47.7419, longitude=7.3429)
+    bundle.stations["Saint-Denis-lès-Martel"] = StationRecord(
+        name="Saint-Denis-lès-Martel",
+        latitude=44.9374,
+        longitude=1.6741,
+    )
+    bundle.stations["Saint-Christophe-Vallon"] = StationRecord(
+        name="Saint-Christophe-Vallon",
+        latitude=44.5296,
+        longitude=2.4255,
+    )
+    bundle.stations["Cergy Saint-Christophe"] = StationRecord(
+        name="Cergy Saint-Christophe",
+        latitude=49.0494,
+        longitude=2.0346,
+    )
+
+    assert planner._station_coordinates(bundle, "DIJON VILLE") is not None
+    assert planner._station_coordinates(bundle, "METZ VILLE") is not None
+    assert planner._station_coordinates(bundle, "MULHOUSE VILLE") is not None
+    assert planner._station_coordinates(bundle, "ST DENIS PRES MARTEL") is not None
+    resolved = planner._resolve_station(bundle, "ST CHRISTOPHE")
+    assert resolved is not None
+    assert resolved.name == "Saint-Christophe-Vallon"
 
 
 def test_max_itineraries_find_connection_to_annecy(planner):
