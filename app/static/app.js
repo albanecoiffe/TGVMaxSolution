@@ -1395,8 +1395,21 @@ async function refreshData() {
   refreshButton.disabled = true;
   refreshButton.textContent = "Rafraichissement...";
   try {
-    await fetch("/api/refresh", { method: "POST" });
+    const response = await fetch("/api/refresh", { method: "POST" });
+    const payload = await response.json();
     await loadCurrentPage();
+    const zeroWatch = payload.zero_watch;
+    if (zeroWatch) {
+      const parts = [];
+      if (zeroWatch.initialized) {
+        parts.push(`Premier snapshot enregistre (${zeroWatch.current_zero_count} trajets a 0 EUR).`);
+      } else {
+        parts.push(
+          `Snapshot mis a jour: ${zeroWatch.new_zero_count} nouveaux, ${zeroWatch.removed_zero_count} disparus, ${zeroWatch.current_zero_count} trajets a 0 EUR actuellement.`
+        );
+      }
+      window.alert(parts.join(" "));
+    }
   } finally {
     refreshButton.disabled = false;
     refreshButton.textContent = "Rafraichir les donnees";

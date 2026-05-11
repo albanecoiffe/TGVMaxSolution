@@ -40,6 +40,10 @@ class Settings:
         return self.data_dir / "cache"
 
     @property
+    def history_dir(self) -> Path:
+        return self.data_dir / "history"
+
+    @property
     def tgvmax_cache_file(self) -> Path:
         return self.cache_dir / "tgvmax.csv"
 

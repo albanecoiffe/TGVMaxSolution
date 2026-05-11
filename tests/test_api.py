@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.config import Settings
+from tests.conftest import TGVMAX_SAMPLE
 
 
 def test_direct_endpoint_returns_results(settings):
@@ -176,3 +177,31 @@ def test_connection_max_field_only_renders_on_connection_pages(settings):
 
     hybrid_response = client.get("/max-ter")
     assert "Correspondance max" in hybrid_response.text
+
+
+def test_refresh_endpoint_returns_zero_watch_diff_and_latest_watch(settings):
+    client = TestClient(create_app(settings))
+
+    first_refresh = client.post("/api/refresh")
+    assert first_refresh.status_code == 200
+    first_payload = first_refresh.json()
+    assert first_payload["zero_watch"]["initialized"] is True
+    assert first_payload["zero_watch"]["current_zero_count"] == 14
+
+    updated_sample = TGVMAX_SAMPLE.replace(
+        "2026-05-23,6615,PARSTR,EST,FPEST,FRSXB,PARIS EST,STRASBOURG,06:45,08:40,OUI\n",
+        "",
+    ) + "2026-05-25,6653,PARBDX,ATL,FPAZ,FBSJ,PARIS MONTPARNASSE,BORDEAUX ST JEAN,10:15,12:20,OUI\n"
+    settings.tgvmax_cache_file.write_text(updated_sample, encoding="utf-8")
+
+    second_refresh = client.post("/api/refresh")
+    assert second_refresh.status_code == 200
+    second_payload = second_refresh.json()
+    assert second_payload["zero_watch"]["new_zero_count"] == 1
+    assert second_payload["zero_watch"]["removed_zero_count"] == 1
+
+    latest_watch = client.get("/api/watch/latest")
+    assert latest_watch.status_code == 200
+    latest_payload = latest_watch.json()
+    assert latest_payload["new_zero_count"] == 1
+    assert latest_payload["removed_zero_count"] == 1

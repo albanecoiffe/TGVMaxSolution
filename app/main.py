@@ -146,6 +146,10 @@ def create_app(
     def refresh():
         return planner.refresh()
 
+    @app.get("/api/watch/latest")
+    def watch_latest():
+        return planner.latest_zero_watch()
+
     @app.get("/api/stations")
     def stations(q: str = Query("", min_length=1)):
         return {"results": planner.search_stations(q)}

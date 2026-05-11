@@ -15,6 +15,7 @@ from app.config import Settings
 from app.models import DataBundle, StationRecord
 from app.services.data_loader import DataRepository
 from app.services.navitia import NavitiaClient
+from app.services.zero_watch import ZeroWatch
 from app.utils import add_minutes, duration_minutes, format_minutes, match_score, normalize_text
 
 
@@ -39,6 +40,7 @@ class TravelPlanner:
         self.settings = settings
         self.repository = repository or DataRepository(settings)
         self.navitia = NavitiaClient(settings)
+        self.zero_watch = ZeroWatch(settings)
         self._mountains = self._load_mountains(settings.mountains_file)
         self._hybrid_cache: dict[tuple[str, str, int | None], dict] = {}
         self._local_rail_extensions_cache: dict[tuple[str, str, str, int | None], list[dict]] = {}
@@ -62,12 +64,17 @@ class TravelPlanner:
         self._hybrid_cache.clear()
         self._local_rail_extensions_cache.clear()
         bundle = self.repository.refresh()
+        zero_watch = self.zero_watch.record_snapshot(bundle.trips, bundle.generated_at)
         return {
             "ok": True,
             "generated_at": bundle.generated_at.isoformat(),
             "trip_count": int(len(bundle.trips)),
             "station_count": len(bundle.stations),
+            "zero_watch": zero_watch,
         }
+
+    def latest_zero_watch(self) -> dict:
+        return self.zero_watch.latest_diff()
 
     def search_stations(self, query: str, limit: int = 12) -> list[dict]:
         bundle = self.repository.get_bundle()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from tests.conftest import TGVMAX_SAMPLE
+
 
 def test_direct_trips_find_all_zero_euro_trains(planner):
     payload = planner.direct_trips("Paris", date(2026, 5, 23))
@@ -176,3 +178,29 @@ def test_hybrid_itineraries_can_limit_connection_wait_time(planner):
     )
     assert payload["enabled"] is True
     assert payload["results"] == []
+
+
+def test_refresh_records_zero_watch_snapshot_and_diff(planner, settings):
+    first_refresh = planner.refresh()
+    assert first_refresh["zero_watch"]["initialized"] is True
+    assert first_refresh["zero_watch"]["current_zero_count"] == 14
+    assert first_refresh["zero_watch"]["new_zero_count"] == 14
+    assert first_refresh["zero_watch"]["removed_zero_count"] == 0
+
+    updated_sample = TGVMAX_SAMPLE.replace(
+        "2026-05-23,6615,PARSTR,EST,FPEST,FRSXB,PARIS EST,STRASBOURG,06:45,08:40,OUI\n",
+        "",
+    ) + "2026-05-25,6653,PARBDX,ATL,FPAZ,FBSJ,PARIS MONTPARNASSE,BORDEAUX ST JEAN,10:15,12:20,OUI\n"
+    settings.tgvmax_cache_file.write_text(updated_sample, encoding="utf-8")
+
+    second_refresh = planner.refresh()
+    assert second_refresh["zero_watch"]["initialized"] is False
+    assert second_refresh["zero_watch"]["current_zero_count"] == 14
+    assert second_refresh["zero_watch"]["new_zero_count"] == 1
+    assert second_refresh["zero_watch"]["removed_zero_count"] == 1
+    assert second_refresh["zero_watch"]["sample_new_trips"][0]["destination"] == "BORDEAUX ST JEAN"
+    assert second_refresh["zero_watch"]["sample_removed_trips"][0]["destination"] == "STRASBOURG"
+
+    latest = planner.latest_zero_watch()
+    assert latest["new_zero_count"] == 1
+    assert latest["removed_zero_count"] == 1
