@@ -434,6 +434,19 @@ body {
   margin-top: 0.8rem;
 }
 
+.result-actions-stack {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: end;
+}
+
+.result-actions-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+
 .live-status-row {
   display: flex;
   flex-wrap: wrap;
@@ -447,6 +460,16 @@ body {
   background: var(--accent-soft);
   color: var(--accent-dark);
   font-size: 0.85rem;
+}
+
+.result-pill.is-live-confirmed {
+  color: #11683b;
+  background: rgba(55, 175, 106, 0.12);
+}
+
+.result-pill.is-live-unavailable {
+  color: #9a411c;
+  background: rgba(219, 95, 50, 0.12);
 }
 
 .live-status-pill {
@@ -529,6 +552,11 @@ body {
 
 .direct-time-chip small {
   color: var(--muted);
+}
+
+.secondary-button.is-active {
+  border-color: rgba(219, 95, 50, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(219, 95, 50, 0.1);
 }
 
 .direct-option-list {

@@ -59,6 +59,8 @@ let polylineLayer;
 let currentMapModel = null;
 let currentDirectTrips = [];
 let currentLiveSummary = null;
+let currentDirectPayload = null;
+let hideUnavailableDirectTrips = false;
 
 function initMap() {
   map = L.map("map", { zoomControl: true }).setView([46.6, 2.5], 6);
@@ -447,6 +449,32 @@ function liveStatusMarkup(trip) {
   `;
 }
 
+function getVisibleDirectTrips() {
+  if (!hideUnavailableDirectTrips) {
+    return currentDirectTrips;
+  }
+  return currentDirectTrips.filter((trip) => trip.live_status !== "unavailable");
+}
+
+function directLiveBreakdown(trips) {
+  const counts = {
+    confirmed_zero: 0,
+    unavailable: 0,
+    blocked: 0,
+    unknown: 0,
+    skipped: 0,
+    idle: 0,
+    error: 0,
+  };
+
+  trips.forEach((trip) => {
+    const status = trip.live_status || "idle";
+    counts[status] = (counts[status] || 0) + 1;
+  });
+
+  return counts;
+}
+
 function updateResultActions() {
   if (!resultActions) {
     return;
@@ -466,13 +494,31 @@ function updateResultActions() {
   }
 
   resultActions.innerHTML = `
-    <button type="button" id="verify-live-button" class="secondary-button">Verifier maintenant</button>
-    <span class="live-status-note">${escapeHtml(summaryText)}</span>
+    <div class="result-actions-stack">
+      <div class="result-actions-buttons">
+        <button type="button" id="verify-live-button" class="secondary-button">Verifier maintenant</button>
+        ${
+          currentLiveSummary
+            ? `<button type="button" id="toggle-unavailable-button" class="secondary-button${hideUnavailableDirectTrips ? " is-active" : ""}">${hideUnavailableDirectTrips ? "Afficher tout le dataset" : "Masquer les indisponibles live"}</button>`
+            : ""
+        }
+      </div>
+      <span class="live-status-note">${escapeHtml(summaryText)}</span>
+      <span class="live-status-note">Les trajets listes ci-dessous viennent d'abord du dataset SNCF tgvmax. Le controle live sert a qualifier leur disponibilite actuelle.</span>
+    </div>
   `;
 
   const button = document.getElementById("verify-live-button");
   if (button) {
     button.addEventListener("click", verifyDirectTripsLive);
+  }
+  const toggleButton = document.getElementById("toggle-unavailable-button");
+  if (toggleButton) {
+    toggleButton.addEventListener("click", () => {
+      hideUnavailableDirectTrips = !hideUnavailableDirectTrips;
+      updateResultActions();
+      renderDirectResults();
+    });
   }
 }
 
@@ -488,11 +534,11 @@ function syncTripLiveStatusDom(trip) {
   }
 }
 
-function groupDirectTripsByDestination(payload) {
+function groupDirectTripsByDestination(payload, trips = currentDirectTrips) {
   const destinationMeta = new Map((payload.destinations || []).map((item) => [item.destination, item]));
   const groups = new Map();
 
-  currentDirectTrips.forEach((trip) => {
+  trips.forEach((trip) => {
     if (!groups.has(trip.destination)) {
       groups.set(trip.destination, {
         destination: trip.destination,
@@ -517,6 +563,7 @@ function groupDirectTripsByDestination(payload) {
         }
         return left.arrival_time.localeCompare(right.arrival_time);
       }),
+      liveBreakdown: directLiveBreakdown(group.trips),
     }))
     .sort((left, right) => {
       const leftIndex = destinationIndex.get(left.destination) ?? Number.MAX_SAFE_INTEGER;
@@ -554,7 +601,6 @@ function buildDirectMapModel(trips, activeKey = null) {
       coordinates: trip.coordinates?.origin,
     }))
   );
-  const visibleTrips = trips.filter((trip) => trip.live_status !== "unavailable");
   const baseRoutes = [];
   const routesByKey = {};
   const points = [];
@@ -570,7 +616,7 @@ function buildDirectMapModel(trips, activeKey = null) {
     });
   });
 
-  visibleTrips.forEach((trip) => {
+  trips.forEach((trip) => {
     if (!trip.destination) {
       return;
     }
@@ -670,10 +716,7 @@ function applyLiveStatuses(payload) {
   currentDirectTrips.forEach(syncTripLiveStatusDom);
 
   updateResultActions();
-  renderMapModel(buildDirectMapModel(currentDirectTrips, currentMapModel?.activeKey), {
-    focusSelection: false,
-    scrollSelection: false,
-  });
+  renderDirectResults();
 }
 
 async function verifyDirectTripsLive() {
@@ -806,30 +849,52 @@ function renderReturnOptions(trip, renderOptions = {}) {
   `;
 }
 
-function renderDirect(payload) {
-  currentDirectTrips = payload.trips || [];
-  currentLiveSummary = null;
-  updateResultActions();
+function renderDirectResults() {
+  if (!currentDirectPayload) {
+    return;
+  }
 
+  const payload = currentDirectPayload;
+  const visibleTrips = getVisibleDirectTrips();
   const returnSummary = payload.return_date
     ? ` | retours proposes a partir du ${formatFrenchDate(payload.return_date)}`
     : " | retours proposes sur les dates disponibles";
-  resultSummary.textContent = `${payload.destinations.length} destination(s) | ${payload.trip_count} train(s) a 0 EUR depuis ${payload.matched_origins.join(", ")}${returnSummary}`;
+  const visibleDestinations = new Set(visibleTrips.map((trip) => trip.destination)).size;
+  const scopeSummary = hideUnavailableDirectTrips && currentLiveSummary
+    ? ` | vue filtree : ${visibleDestinations} destination(s), ${visibleTrips.length} train(s) encore affiches`
+    : "";
+  resultSummary.textContent = `${payload.destinations.length} destination(s) | ${payload.trip_count} train(s) marques a 0 EUR dans le dataset SNCF depuis ${payload.matched_origins.join(", ")}${returnSummary}${scopeSummary}`;
 
-  if (!payload.trips.length) {
-    resultsContainer.innerHTML = emptyState("Aucun train a 0 EUR trouve pour ce depart et cette date.");
+  if (!currentDirectTrips.length) {
+    resultsContainer.innerHTML = emptyState("Aucun train marque a 0 EUR dans le dataset SNCF pour ce depart et cette date.");
     renderMapModel({ points: [], legend: PAGE_LEGENDS.direct }, { focusSelection: false, scrollSelection: false });
     return;
   }
 
-  const directGroups = groupDirectTripsByDestination(payload);
+  if (!visibleTrips.length) {
+    resultsContainer.innerHTML = emptyState("Tous les trajets affiches ont ete marques indisponibles par le controle live. Reviens a la vue dataset pour tout revoir.");
+    renderMapModel({ points: [], legend: PAGE_LEGENDS.direct }, { focusSelection: false, scrollSelection: false });
+    return;
+  }
+
+  const directGroups = groupDirectTripsByDestination(currentDirectPayload, visibleTrips);
 
   resultsContainer.innerHTML = directGroups
     .map((group) => {
       const firstTrip = group.trips[0];
       const summary = group.trips.length > 1
-        ? `${group.trips.length} creneaux a 0 EUR ce jour`
-        : "1 train a 0 EUR ce jour";
+        ? `${group.trips.length} creneaux issus du dataset SNCF`
+        : "1 train issu du dataset SNCF";
+      const liveBadge = currentLiveSummary
+        ? `
+          <div class="result-meta">
+            ${group.liveBreakdown.confirmed_zero ? `<span class="result-pill is-live-confirmed">${group.liveBreakdown.confirmed_zero} confirme(s) live</span>` : ""}
+            ${group.liveBreakdown.unavailable ? `<span class="result-pill is-live-unavailable">${group.liveBreakdown.unavailable} indisponible(s)</span>` : ""}
+            ${group.liveBreakdown.skipped ? `<span class="result-pill">${group.liveBreakdown.skipped} non controles</span>` : ""}
+            ${group.liveBreakdown.idle ? `<span class="result-pill">${group.liveBreakdown.idle} non verifies</span>` : ""}
+          </div>
+        `
+        : "";
       return `
         <article class="result-item" data-result-key="${group.resultKey}">
           <div class="result-item-head">
@@ -838,6 +903,7 @@ function renderDirect(payload) {
               <p class="muted">${escapeHtml(summary)}</p>
             </div>
           </div>
+          ${liveBadge}
           <div class="direct-time-chip-list">
             ${group.trips
               .map(
@@ -861,12 +927,21 @@ function renderDirect(payload) {
   bindSelectableCards();
 
   renderMapModel(
-    buildDirectMapModel(currentDirectTrips),
+    buildDirectMapModel(visibleTrips),
     {
       focusSelection: false,
       scrollSelection: false,
     }
   );
+}
+
+function renderDirect(payload) {
+  currentDirectPayload = payload;
+  currentDirectTrips = payload.trips || [];
+  currentLiveSummary = null;
+  hideUnavailableDirectTrips = false;
+  updateResultActions();
+  renderDirectResults();
 }
 
 function renderDayTrips(payload) {

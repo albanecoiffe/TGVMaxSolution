@@ -154,7 +154,7 @@ def test_direct_live_endpoint_returns_live_statuses(settings):
 def test_section_pages_render(settings):
     client = TestClient(create_app(settings))
     routes = [
-        ("/", "Trains a 0 EUR du jour"),
+        ("/", "Dataset SNCF puis verification live"),
         ("/aller-retour-journee", "Aller-retour journee"),
         ("/correspondances-max", "Correspondances MAX"),
         ("/max-ter", "MAX + TER"),
