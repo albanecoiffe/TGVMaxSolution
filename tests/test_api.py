@@ -46,6 +46,19 @@ def test_hybrid_endpoint_can_use_open_gtfs_without_token(settings):
     assert result["via_max_station"] == "LYON PART DIEU"
 
 
+def test_routes_max_endpoint_keeps_requested_return_date(settings):
+    client = TestClient(create_app(settings))
+    response = client.get(
+        "/api/routes/max",
+        params={"origin": "Paris", "date": "2026-05-23", "return_date": "2026-05-24"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["return_date"] == "2026-05-24"
+    annecy = next(item for item in payload["results"] if item["destination"] == "ANNECY")
+    assert annecy["itineraries"][0]["return_options"]["requested_return_date"] == "2026-05-24"
+
+
 def test_hybrid_endpoint_accepts_max_connection_minutes(settings):
     client = TestClient(create_app(settings))
     response = client.get(

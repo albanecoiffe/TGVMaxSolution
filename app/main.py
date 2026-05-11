@@ -209,6 +209,7 @@ def create_app(
     def routes_max(
         origin: str,
         travel_date: date = Query(alias="date"),
+        return_date: date | None = Query(default=None, alias="return_date"),
         max_connections: int = 2,
         min_connection_minutes: int = 25,
         max_connection_minutes: int | None = None,
@@ -217,6 +218,7 @@ def create_app(
             return planner.max_itineraries(
                 origin_query=origin,
                 travel_date=travel_date,
+                return_date=return_date,
                 max_connections=max_connections,
                 min_connection_minutes=min_connection_minutes,
                 max_connection_minutes=max_connection_minutes,

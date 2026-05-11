@@ -20,7 +20,7 @@ TGVMAX_SAMPLE = """date,train_no,entity,axe,origine_iata,destination_iata,origin
 2026-05-23,6625,LILPAR,NORD,FLL,FPPN,LILLE EUROPE,19:40,20:45,OUI
 2026-05-23,6627,LYNPAR,SE,FPLYD,FPPY,LYON PART DIEU,PARIS GARE DE LYON,19:00,21:00,OUI
 2026-05-23,6628,LYNPAR,SE,FPLYD,FPPY,LYON PART DIEU,PARIS GARE DE LYON,21:15,23:15,OUI
-2026-05-23,6629,ANNCY,ALP,FRANC,FPLYD,ANNECY,18:20,20:10,OUI
+2026-05-23,6629,ANNCY,ALP,FRANC,FPLYD,ANNECY,LYON PART DIEU,18:20,20:10,OUI
 2026-05-23,6631,STRPAR,EST,FRSXB,FPEST,STRASBOURG,19:15,21:10,OUI
 2026-05-23,6633,GRNLYN,ALP,FRGRE,FPLYD,GRENOBLE,LYON PART DIEU,18:00,19:20,OUI
 2026-05-24,6641,PARLYN,SE,FPPY,FPLYD,PARIS GARE DE LYON,LYON PART DIEU,06:00,08:00,NON
@@ -63,6 +63,11 @@ STATIONS_SAMPLE = {
             "type": "Feature",
             "properties": {"nom_gare": "STRASBOURG", "commune": "Strasbourg"},
             "geometry": {"type": "Point", "coordinates": [7.7344, 48.5851]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"nom_gare": "BORDEAUX SAINT JEAN", "commune": "Bordeaux"},
+            "geometry": {"type": "Point", "coordinates": [-0.5562, 44.8253]},
         },
         {
             "type": "Feature",

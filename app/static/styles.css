@@ -28,6 +28,40 @@ body {
   min-height: 100vh;
 }
 
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: rgba(120, 120, 120, 0.42);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    visibility 180ms ease;
+  z-index: 1000;
+}
+
+.loading-overlay.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.loading-overlay-label {
+  font-size: clamp(2.4rem, 7vw, 5.8rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.96);
+  text-transform: uppercase;
+  text-align: center;
+  text-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
 .background-glow {
   position: fixed;
   inset: auto;
@@ -589,6 +623,11 @@ body {
   gap: 0.65rem;
 }
 
+.return-time-card {
+  display: grid;
+  gap: 0.55rem;
+}
+
 .return-time-chip {
   display: inline-flex;
   flex-direction: column;
@@ -618,6 +657,16 @@ body {
 
 .return-time-chip small {
   color: var(--muted);
+}
+
+.return-itinerary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.return-segment-list {
+  margin-top: 0;
 }
 
 .segment-list {

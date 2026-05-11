@@ -17,11 +17,21 @@ Application web Python pour explorer les trajets `TGV MAX` a 0 EUR avec :
 ## Lancer le projet
 
 ```bash
-uv sync
-uv run uvicorn app.main:app --reload
+make install
+make backend
 ```
 
 Puis ouvrir [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+## Commandes Make utiles
+
+```bash
+make help
+make test
+make test-api
+make test-planner
+make refresh
+```
 
 ## Variables utiles
 

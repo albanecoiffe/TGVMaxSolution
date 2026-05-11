@@ -95,6 +95,16 @@ def test_station_coordinates_can_fallback_to_commune_centroid(planner):
     assert lille_intramuros_by_name is not None
 
 
+def test_station_coordinates_match_st_abbreviation(planner):
+    bundle = planner.repository.get_bundle()
+
+    bordeaux = planner._station_coordinates(bundle, "BORDEAUX ST JEAN")
+
+    assert bordeaux is not None
+    assert round(bordeaux["latitude"], 4) == 44.8253
+    assert round(bordeaux["longitude"], 4) == -0.5562
+
+
 def test_max_itineraries_find_connection_to_annecy(planner):
     payload = planner.max_itineraries("Paris", date(2026, 5, 23), max_connections=2, min_connections=1)
     annecy = next(item for item in payload["results"] if item["destination"] == "ANNECY")
@@ -122,6 +132,21 @@ def test_max_itineraries_can_limit_connection_wait_time(planner):
     destinations = {item["destination"] for item in payload["results"]}
     assert "ANNECY" not in destinations
     assert "GRENOBLE" not in destinations
+
+
+def test_max_itineraries_include_return_options(planner):
+    payload = planner.max_itineraries(
+        "Paris",
+        date(2026, 5, 23),
+        max_connections=2,
+        min_connections=1,
+    )
+    annecy = next(item for item in payload["results"] if item["destination"] == "ANNECY")
+    itinerary = annecy["itineraries"][0]
+    assert itinerary["return_options"]["requested_return_date"] is None
+    assert itinerary["return_options"]["has_any"] is True
+    assert itinerary["return_options"]["available_dates"][0]["date"] == "2026-05-23"
+    assert itinerary["return_options"]["available_dates"][0]["times"][0]["destination"] == "PARIS GARE DE LYON"
 
 
 def test_hybrid_itineraries_can_use_open_gtfs_without_token(planner):

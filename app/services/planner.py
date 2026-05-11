@@ -188,6 +188,7 @@ class TravelPlanner:
         self,
         origin_query: str,
         travel_date: date,
+        return_date: date | None = None,
         max_connections: int = 2,
         min_connection_minutes: int = 25,
         max_connection_minutes: int | None = None,
@@ -198,25 +199,104 @@ class TravelPlanner:
         matched_origins = self._resolve_station_query(bundle, origin_query)
         day_trips = self._day_trips(bundle, travel_date)
         available = day_trips[day_trips["is_zero"]].sort_values("depart_dt")
+        paths = self._find_itinerary_paths(
+            available=available,
+            origin_names=matched_origins,
+            max_connections=max_connections,
+            min_connection_minutes=min_connection_minutes,
+            max_connection_minutes=max_connection_minutes,
+            min_connections=min_connections,
+            max_results=max_results,
+        )
+        itineraries = [
+            self._serialize_path(
+                bundle,
+                path,
+                return_date=return_date,
+                destination_names=matched_origins,
+                max_connections=max_connections,
+                min_connection_minutes=min_connection_minutes,
+                max_connection_minutes=max_connection_minutes,
+            )
+            for path in paths
+        ]
+
+        grouped = defaultdict(list)
+        for itinerary in itineraries:
+            grouped[itinerary["destination"]].append(itinerary)
+        grouped_results = [
+            {
+                "destination": destination,
+                "coordinates": self._station_coordinates(bundle, destination),
+                "itineraries": sorted(
+                    items,
+                    key=lambda item: (
+                        item["duration_minutes"],
+                        item["connections"],
+                        item["departure_time"],
+                    ),
+                )[:3],
+            }
+            for destination, items in grouped.items()
+        ]
+        grouped_results.sort(
+            key=lambda item: (
+                item["itineraries"][0]["duration_minutes"],
+                item["destination"],
+            )
+        )
+        return {
+            "origin_query": origin_query,
+            "matched_origins": matched_origins,
+            "travel_date": travel_date.isoformat(),
+            "return_date": return_date.isoformat() if return_date else None,
+            "results": grouped_results,
+        }
+
+    def _find_itinerary_paths(
+        self,
+        available,
+        origin_names: list[str],
+        destination_names: list[str] | None = None,
+        earliest_departures: dict[str, datetime] | None = None,
+        max_connections: int = 2,
+        min_connection_minutes: int = 25,
+        max_connection_minutes: int | None = None,
+        min_connections: int = 0,
+        max_results: int | None = None,
+    ) -> list[list]:
         trips_by_origin = {
             origin: group
             for origin, group in available.groupby("origin")
         }
+        destination_name_set = set(destination_names or [])
 
         heap: list[tuple[datetime, str, tuple[str, ...], list[dict]]] = []
         best_arrival: dict[tuple[str, int], datetime] = {}
-        itineraries = []
+        itineraries: list[list] = []
 
-        for origin in matched_origins:
-            heappush(heap, (datetime.combine(travel_date, time(0, 0)), origin, tuple([origin]), []))
-            best_arrival[(origin, 0)] = datetime.combine(travel_date, time(0, 0))
+        for origin in origin_names:
+            earliest_departure = (
+                earliest_departures.get(origin)
+                if earliest_departures is not None and origin in earliest_departures
+                else None
+            )
+            if earliest_departure is None:
+                origin_trips = trips_by_origin.get(origin)
+                if origin_trips is None or origin_trips.empty:
+                    continue
+                earliest_departure = origin_trips["depart_dt"].min().replace(hour=0, minute=0)
+            heappush(heap, (earliest_departure, origin, tuple([origin]), []))
+            best_arrival[(origin, 0)] = earliest_departure
 
         limit = max_results or self.settings.max_itinerary_results
 
         while heap and len(itineraries) < limit:
             current_time, station, visited, path = heappop(heap)
-            if len(path) >= max(1, min_connections + 1):
-                itineraries.append(self._serialize_path(bundle, path))
+            is_candidate = len(path) >= max(1, min_connections + 1)
+            reaches_destination = not destination_name_set or station in destination_name_set
+            if is_candidate and reaches_destination:
+                itineraries.append(path)
             if len(path) > max_connections:
                 continue
 
@@ -252,37 +332,7 @@ class TravelPlanner:
                         new_path,
                     ),
                 )
-
-        grouped = defaultdict(list)
-        for itinerary in itineraries:
-            grouped[itinerary["destination"]].append(itinerary)
-        grouped_results = [
-            {
-                "destination": destination,
-                "coordinates": self._station_coordinates(bundle, destination),
-                "itineraries": sorted(
-                    items,
-                    key=lambda item: (
-                        item["duration_minutes"],
-                        item["connections"],
-                        item["departure_time"],
-                    ),
-                )[:3],
-            }
-            for destination, items in grouped.items()
-        ]
-        grouped_results.sort(
-            key=lambda item: (
-                item["itineraries"][0]["duration_minutes"],
-                item["destination"],
-            )
-        )
-        return {
-            "origin_query": origin_query,
-            "matched_origins": matched_origins,
-            "travel_date": travel_date.isoformat(),
-            "results": grouped_results,
-        }
+        return itineraries
 
     def hybrid_itineraries(
         self,
@@ -415,8 +465,13 @@ class TravelPlanner:
         if name in bundle.stations:
             return bundle.stations[name]
         name_norm = normalize_text(name)
+        name_aliases = self._station_name_aliases(name)
         exact_match = next(
-            (station for station_name, station in bundle.stations.items() if normalize_text(station_name) == name_norm),
+            (
+                station
+                for station_name, station in bundle.stations.items()
+                if self._station_name_aliases(station_name) & name_aliases
+            ),
             None,
         )
         if exact_match is not None:
@@ -424,11 +479,28 @@ class TravelPlanner:
         contains_matches = [
             station
             for station_name, station in bundle.stations.items()
-            if name_norm and name_norm in normalize_text(station_name)
+            if name_norm
+            and any(
+                alias in station_alias
+                for alias in name_aliases
+                for station_alias in self._station_name_aliases(station_name)
+            )
         ]
         if len(contains_matches) == 1:
             return contains_matches[0]
         return None
+
+    @staticmethod
+    def _station_name_aliases(name: str) -> set[str]:
+        normalized = normalize_text(name)
+        if not normalized:
+            return set()
+
+        aliases = {normalized}
+        saint_variant = re.sub(r"\bST\b", "SAINT", normalized)
+        sainte_variant = re.sub(r"\bSTE\b", "SAINTE", saint_variant)
+        aliases.add(sainte_variant)
+        return aliases
 
     def _hybrid_enabled(self, bundle: DataBundle) -> bool:
         return self._local_rail_enabled(bundle)
@@ -717,6 +789,69 @@ class TravelPlanner:
             "available_dates": available_dates,
         }
 
+    def _build_return_path_options(
+        self,
+        bundle: DataBundle,
+        origin_name: str,
+        destination_names: list[str],
+        earliest_departure: datetime,
+        return_date: date | None,
+        max_connections: int,
+        min_connection_minutes: int,
+        max_connection_minutes: int | None,
+        max_dates: int = 5,
+        max_paths_per_date: int = 3,
+    ) -> dict:
+        start_date = return_date or earliest_departure.date()
+        candidate_dates = sorted(
+            trip_date
+            for trip_date in bundle.trips["date"].dropna().unique().tolist()
+            if trip_date >= start_date.isoformat()
+        )
+
+        available_dates = []
+        total_paths = 0
+        for trip_date in candidate_dates:
+            if len(available_dates) >= max_dates:
+                break
+            day = date.fromisoformat(trip_date)
+            day_trips = self._day_trips(bundle, day)
+            available = day_trips[day_trips["is_zero"]].sort_values("depart_dt")
+            if available.empty:
+                continue
+            earliest_by_origin = {
+                origin_name: earliest_departure if day == earliest_departure.date() else datetime.combine(day, time(0, 0))
+            }
+            paths = self._find_itinerary_paths(
+                available=available,
+                origin_names=[origin_name],
+                destination_names=destination_names,
+                earliest_departures=earliest_by_origin,
+                max_connections=max_connections,
+                min_connection_minutes=min_connection_minutes,
+                max_connection_minutes=max_connection_minutes,
+                max_results=max_paths_per_date,
+            )
+            if not paths:
+                continue
+            serialized_paths = [self._serialize_path(bundle, path) for path in paths]
+            total_paths += len(serialized_paths)
+            available_dates.append(
+                {
+                    "date": trip_date,
+                    "total_times": len(serialized_paths),
+                    "times": serialized_paths,
+                }
+            )
+
+        return {
+            "requested_return_date": return_date.isoformat() if return_date else None,
+            "has_any": bool(available_dates),
+            "total_dates": len(available_dates),
+            "total_trips": total_paths,
+            "available_dates": available_dates,
+        }
+
     def _serialize_trip(self, bundle: DataBundle, row) -> dict:
         if hasattr(row, "_asdict"):
             data = row._asdict()
@@ -760,12 +895,21 @@ class TravelPlanner:
         )
         return sha1(identity.encode("utf-8")).hexdigest()[:16]
 
-    def _serialize_path(self, bundle: DataBundle, path: list) -> dict:
+    def _serialize_path(
+        self,
+        bundle: DataBundle,
+        path: list,
+        return_date: date | None = None,
+        destination_names: list[str] | None = None,
+        max_connections: int = 2,
+        min_connection_minutes: int = 25,
+        max_connection_minutes: int | None = None,
+    ) -> dict:
         first = path[0]
         last = path[-1]
         segments = [self._serialize_trip(bundle, segment) for segment in path]
         path_duration = duration_minutes(first.depart_dt, last.arrive_dt)
-        return {
+        payload = {
             "origin": first.origin,
             "destination": last.destination,
             "departure_time": first.depart_time,
@@ -775,8 +919,21 @@ class TravelPlanner:
             "duration_minutes": path_duration,
             "duration_label": format_minutes(path_duration),
             "connections": max(0, len(path) - 1),
+            "booking_url": self._build_sncf_booking_url(bundle, first.origin, last.destination, first.depart_dt),
             "segments": segments,
         }
+        if destination_names:
+            payload["return_options"] = self._build_return_path_options(
+                bundle=bundle,
+                origin_name=last.destination,
+                destination_names=destination_names,
+                earliest_departure=last.arrive_dt,
+                return_date=return_date,
+                max_connections=max_connections,
+                min_connection_minutes=min_connection_minutes,
+                max_connection_minutes=max_connection_minutes,
+            )
+        return payload
 
     def _resolve_hybrid_target(self, bundle: DataBundle, query: str) -> dict | None:
         query_norm = normalize_text(query)

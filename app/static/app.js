@@ -18,6 +18,7 @@ const resultsContainer = document.getElementById("results");
 const resultSummary = document.getElementById("result-summary");
 const mapLegend = document.getElementById("map-legend");
 const resultActions = document.getElementById("result-actions");
+const loadingOverlay = document.getElementById("loading-overlay");
 
 const ROUTE_COLORS = [
   "#db5f32",
@@ -106,6 +107,11 @@ async function apiGet(url) {
 
 function emptyState(message) {
   return `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
+function setLoadingState(isLoading) {
+  loadingOverlay?.classList.toggle("is-visible", isLoading);
+  loadingOverlay?.setAttribute("aria-hidden", isLoading ? "false" : "true");
 }
 
 function getParamsObject() {
@@ -348,7 +354,12 @@ function renderMapModel(model, options = {}) {
 
   drawRouteEntries(model.baseRoutes, bounds);
 
-  (model.points || []).forEach((point) => {
+  const orderedPoints = [
+    ...(model.points || []).filter((point) => point.kind !== "origin"),
+    ...(model.points || []).filter((point) => point.kind === "origin"),
+  ];
+
+  orderedPoints.forEach((point) => {
     const coordinates = point.coordinates;
     if (!coordinates) {
       return;
@@ -709,15 +720,16 @@ async function verifyDirectTripsLive() {
   }
 }
 
-function renderReturnOptions(trip) {
-  const options = trip.return_options;
-  if (!options) {
+function renderReturnOptions(trip, renderOptions = {}) {
+  const showSegments = Boolean(renderOptions.showSegments);
+  const returnOptions = trip.return_options;
+  if (!returnOptions) {
     return "";
   }
 
-  if (!options.has_any) {
-    const emptyMessage = options.requested_return_date
-      ? `Aucun retour a 0 EUR le ${formatFrenchDate(options.requested_return_date)}.`
+  if (!returnOptions.has_any) {
+    const emptyMessage = returnOptions.requested_return_date
+      ? `Aucun retour a 0 EUR le ${formatFrenchDate(returnOptions.requested_return_date)}.`
       : "Aucun retour a 0 EUR trouve dans la fenetre de donnees apres ce trajet.";
     return `
       <div class="return-panel return-panel-empty">
@@ -727,12 +739,12 @@ function renderReturnOptions(trip) {
     `;
   }
 
-  const heading = options.requested_return_date
-    ? `Retours a 0 EUR a partir du ${formatFrenchDate(options.requested_return_date)}`
-    : `Retours a 0 EUR les plus proches (${options.total_dates} date(s))`;
-  const hint = options.total_dates > options.available_dates.length
-    ? `Apercu des ${options.available_dates.length} prochaines dates retour.`
-    : `${options.total_trips} train(s) retour a 0 EUR repere(s).`;
+  const heading = returnOptions.requested_return_date
+    ? `Retours a 0 EUR a partir du ${formatFrenchDate(returnOptions.requested_return_date)}`
+    : `Retours a 0 EUR les plus proches (${returnOptions.total_dates} date(s))`;
+  const hint = returnOptions.total_dates > returnOptions.available_dates.length
+    ? `Apercu des ${returnOptions.available_dates.length} prochaines dates retour.`
+    : `${returnOptions.total_trips} train(s) retour a 0 EUR repere(s).`;
 
   return `
     <div class="return-panel">
@@ -740,7 +752,7 @@ function renderReturnOptions(trip) {
         <h4>${escapeHtml(heading)}</h4>
         <p class="live-status-note">${escapeHtml(hint)}</p>
         <div class="return-date-list">
-          ${options.available_dates
+          ${returnOptions.available_dates
             .map(
               (group) => `
                 <section class="return-date-group">
@@ -749,10 +761,37 @@ function renderReturnOptions(trip) {
                     ${group.times
                       .map(
                         (returnTrip) => `
-                          <a class="return-time-chip" href="${escapeHtml(returnTrip.booking_url)}" title="Ouvrir le retour sur SNCF Connect">
-                            <span>${escapeHtml(returnTrip.departure_time)}</span>
-                            <small>${escapeHtml(returnTrip.arrival_time)}</small>
-                          </a>
+                          <div class="return-time-card">
+                            <a class="return-time-chip" href="${escapeHtml(returnTrip.booking_url)}" title="Ouvrir le retour sur SNCF Connect">
+                              <span>${escapeHtml(returnTrip.departure_time)}</span>
+                              <small>${escapeHtml(returnTrip.arrival_time)}</small>
+                            </a>
+                            ${
+                              showSegments && Array.isArray(returnTrip.segments)
+                                ? `
+                                  <div class="return-itinerary-meta">
+                                    <span class="result-pill">${escapeHtml(returnTrip.duration_label)}</span>
+                                    <span class="result-pill">${returnTrip.connections} correspondance(s)</span>
+                                  </div>
+                                  <div class="segment-list return-segment-list">
+                                    ${returnTrip.segments
+                                      .map(
+                                        (segment) => `
+                                          <div class="segment">
+                                            <div>
+                                              <strong>${escapeHtml(segment.origin)} -> ${escapeHtml(segment.destination)}</strong>
+                                              <span class="muted">Train ${escapeHtml(segment.train_no || "n/a")}</span>
+                                            </div>
+                                            <div>${escapeHtml(segment.departure_time)} -> ${escapeHtml(segment.arrival_time)}</div>
+                                          </div>
+                                        `
+                                      )
+                                      .join("")}
+                                  </div>
+                                `
+                                : ""
+                            }
+                          </div>
                         `
                       )
                       .join("")}
@@ -931,10 +970,13 @@ function renderDayTrips(payload) {
 function routeCard(group) {
   const best = group.itineraries[0];
   const bestTravelMinutes = totalTravelMinutes(best.segments);
+  const returnSummary = group.return_date
+    ? ` | retours a partir du ${formatFrenchDate(group.return_date)}`
+    : " | retours proposes sur dates disponibles";
   return `
     <article class="result-item" data-result-key="${group.resultKey}">
       <h3>${escapeHtml(group.destination)}</h3>
-      <p class="muted">Premier parcours propose ${escapeHtml(best.departure_time)} -> ${escapeHtml(best.arrival_time)}</p>
+      <p class="muted">Premier parcours propose ${escapeHtml(best.departure_time)} -> ${escapeHtml(best.arrival_time)}${escapeHtml(returnSummary)}</p>
       <div class="result-meta">
         <span class="route-swatch" style="--route-color: ${group.color};"></span>
         <span class="result-pill">Duree totale ${escapeHtml(best.duration_label)}</span>
@@ -972,6 +1014,7 @@ function routeCard(group) {
                     )
                     .join("")}
                 </div>
+                ${renderReturnOptions(itinerary, { showSegments: true })}
               </div>
             `;
           })
@@ -999,7 +1042,10 @@ function renderRoutes(payload) {
   currentLiveSummary = null;
   updateResultActions();
 
-  resultSummary.textContent = `${payload.results.length} destination(s) accessibles avec correspondances MAX. Clique une destination ou un point de la carte pour tracer un seul chemin proprement.`;
+  const returnSummary = payload.return_date
+    ? ` Retours proposes a partir du ${formatFrenchDate(payload.return_date)}.`
+    : " Retours proposes sur les dates disponibles.";
+  resultSummary.textContent = `${payload.results.length} destination(s) accessibles avec correspondances MAX.${returnSummary} Clique une destination ou un point de la carte pour tracer un seul chemin proprement.`;
 
   if (!payload.results.length) {
     resultsContainer.innerHTML = emptyState("Aucune correspondance MAX trouvee.");
@@ -1011,6 +1057,7 @@ function renderRoutes(payload) {
     ...group,
     color: getRouteColor(index),
     route: group.itineraries[0],
+    return_date: payload.return_date,
     resultKey: makeResultKey("route", group.destination),
   }));
 
@@ -1257,6 +1304,7 @@ async function loadCurrentPage() {
   }
 
   resultSummary.textContent = "Chargement...";
+  setLoadingState(true);
 
   try {
     if (page.key === "direct") {
@@ -1294,6 +1342,8 @@ async function loadCurrentPage() {
     resultSummary.textContent = error.message;
     resultsContainer.innerHTML = emptyState(error.message);
     renderMapModel({ points: [], legend: PAGE_LEGENDS[page.key] || [] }, { focusSelection: false, scrollSelection: false });
+  } finally {
+    setLoadingState(false);
   }
 }
 
