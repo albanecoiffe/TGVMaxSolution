@@ -73,6 +73,20 @@ def format_minutes(total_minutes: int) -> str:
     return f"{hours}h{minutes:02d}"
 
 
+def format_price(amount: str | float | int | None, currency: str | None) -> str | None:
+    if amount in (None, "") or not currency:
+        return None
+    try:
+        numeric_amount = float(amount)
+    except (TypeError, ValueError):
+        return None
+    normalized_currency = currency.upper()
+    amount_text = f"{numeric_amount:.2f}".replace(".", ",")
+    if normalized_currency == "EUR":
+        return f"{amount_text} EUR"
+    return f"{amount_text} {normalized_currency}"
+
+
 def safe_float(value: object) -> float | None:
     try:
         if value is None:

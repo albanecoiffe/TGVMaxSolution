@@ -1056,6 +1056,9 @@ function renderHybrid(payload) {
           <p class="muted">MAX ${escapeHtml(item.max_itinerary.departure_time)} -> ${escapeHtml(item.max_itinerary.arrival_time)} puis TER ${escapeHtml(item.ter_extension.departure_time)} -> ${escapeHtml(item.ter_extension.arrival_time)}</p>
           <div class="result-meta">
             <span class="result-pill">Total ${escapeHtml(item.total_duration_label)}</span>
+            ${item.ter_extension.price_label ? `<span class="result-pill">TER ${escapeHtml(item.ter_extension.price_label)}</span>` : ""}
+            ${!item.ter_extension.price_label && item.ter_extension.sections?.some((section) => section.booking_url) ? '<span class="result-pill">Prix par segment ci-dessous</span>' : ""}
+            ${!item.ter_extension.price_label && !(item.ter_extension.sections?.some((section) => section.booking_url)) ? '<span class="result-pill">Prix TER indisponible</span>' : ""}
             ${item.direct_max_available ? '<span class="result-pill">Aussi en MAX direct</span>' : ""}
           </div>
           <div class="segment-list">
@@ -1065,8 +1068,12 @@ function renderHybrid(payload) {
                   <div class="segment">
                     <div>
                       <strong>${escapeHtml(segment.origin)} -> ${escapeHtml(segment.destination)}</strong>
+                      <span class="segment-kind">TGV MAX</span>
                     </div>
-                    <div>${escapeHtml(segment.departure_time)} -> ${escapeHtml(segment.arrival_time)}</div>
+                    <div class="segment-actions">
+                      <span>${escapeHtml(segment.departure_time)} -> ${escapeHtml(segment.arrival_time)}</span>
+                      ${segment.booking_url ? `<a class="result-link" href="${escapeHtml(segment.booking_url)}" target="_blank" rel="noopener noreferrer">Voir train SNCF</a>` : ""}
+                    </div>
                   </div>
                 `
               )
@@ -1077,9 +1084,12 @@ function renderHybrid(payload) {
                   <div class="segment">
                     <div>
                       <strong>${escapeHtml(item.direct_max_trip.origin)} -> ${escapeHtml(item.direct_max_trip.destination)}</strong>
-                      <span class="muted">Accessible aussi en MAX direct</span>
+                      <span class="segment-kind">TGV MAX direct</span>
                     </div>
-                    <div>${escapeHtml(item.direct_max_trip.departure_time)} -> ${escapeHtml(item.direct_max_trip.arrival_time)}</div>
+                    <div class="segment-actions">
+                      <span>${escapeHtml(item.direct_max_trip.departure_time)} -> ${escapeHtml(item.direct_max_trip.arrival_time)}</span>
+                      ${item.direct_max_trip.booking_url ? `<a class="result-link" href="${escapeHtml(item.direct_max_trip.booking_url)}" target="_blank" rel="noopener noreferrer">Voir train SNCF</a>` : ""}
+                    </div>
                   </div>
                 `
                 : ""
@@ -1090,7 +1100,11 @@ function renderHybrid(payload) {
                   <div class="segment">
                     <div>
                       <strong>${escapeHtml(section.from)} -> ${escapeHtml(section.to)}</strong>
-                      <span class="muted">${escapeHtml(section.mode)}${section.label ? ` ${escapeHtml(section.label)}` : ""}</span>
+                      <span class="segment-kind">${escapeHtml(section.mode)}${section.label ? ` ${escapeHtml(section.label)}` : ""}</span>
+                    </div>
+                    <div class="segment-actions">
+                      <span>${escapeHtml(section.departure_time)} -> ${escapeHtml(section.arrival_time)}</span>
+                      ${section.booking_url ? `<a class="result-link" href="${escapeHtml(section.booking_url)}" target="_blank" rel="noopener noreferrer">Voir prix</a>` : ""}
                     </div>
                   </div>
                 `

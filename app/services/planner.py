@@ -44,6 +44,7 @@ class TravelPlanner:
         self._mountains = self._load_mountains(settings.mountains_file)
         self._hybrid_cache: dict[tuple[str, str, int | None], dict] = {}
         self._local_rail_extensions_cache: dict[tuple[str, str, str, int | None], list[dict]] = {}
+        self._ter_price_cache: dict[tuple[str, str, str], dict | None] = {}
 
     def meta(self) -> dict:
         bundle = self.repository.get_bundle()
@@ -62,6 +63,7 @@ class TravelPlanner:
     def refresh(self) -> dict:
         self._hybrid_cache.clear()
         self._local_rail_extensions_cache.clear()
+        self._ter_price_cache.clear()
         bundle = self.repository.refresh()
         zero_watch = self.zero_watch.record_snapshot(bundle.trips, bundle.generated_at)
         return {
@@ -662,8 +664,21 @@ class TravelPlanner:
                 if normalize_text(destination_name) == normalize_text(origin_stop.name):
                     continue
                 existing = best_paths_by_destination.get(destination_name)
-                serialized = self._serialize_local_rail_path(path)
+                serialized = self._serialize_local_rail_path(bundle, path)
                 serialized["destination"] = destination_name
+                serialized["booking_url"] = self._build_sncf_booking_url(
+                    bundle,
+                    origin_stop.name,
+                    destination_name,
+                    serialized["departure_datetime"],
+                )
+                serialized = self._enrich_local_rail_price(
+                    bundle=bundle,
+                    origin_name=origin_stop.name,
+                    destination_name=destination_name,
+                    departure_after=serialized["departure_datetime"],
+                    path_payload=serialized,
+                )
                 if (
                     existing is None
                     or serialized["duration_minutes"] < existing["duration_minutes"]
@@ -676,13 +691,19 @@ class TravelPlanner:
         self._local_rail_extensions_cache[cache_key] = trimmed_results
         return trimmed_results
 
-    def _serialize_local_rail_path(self, path: list[dict]) -> dict:
+    def _serialize_local_rail_path(self, bundle: DataBundle, path: list[dict]) -> dict:
         departure = path[0]["departure_dt"]
         arrival = path[-1]["arrival_dt"]
         return {
             "departure_time": departure.strftime("%H:%M"),
             "arrival_time": arrival.strftime("%H:%M"),
+            "departure_datetime": departure,
+            "arrival_datetime": arrival,
             "duration_minutes": duration_minutes(departure, arrival),
+            "price": None,
+            "price_label": None,
+            "price_status": "unavailable",
+            "booking_url": None,
             "sections": [
                 {
                     "type": "public_transport",
@@ -690,10 +711,59 @@ class TravelPlanner:
                     "label": segment["label"],
                     "from": segment["from"],
                     "to": segment["to"],
+                    "departure_time": segment["departure_dt"].strftime("%H:%M"),
+                    "arrival_time": segment["arrival_dt"].strftime("%H:%M"),
+                    "departure_datetime": segment["departure_dt"],
+                    "arrival_datetime": segment["arrival_dt"],
+                    "booking_url": self._build_sncf_booking_url(
+                        bundle,
+                        segment["from"],
+                        segment["to"],
+                        segment["departure_dt"],
+                    ),
                 }
                 for segment in path
             ],
         }
+
+    def _enrich_local_rail_price(
+        self,
+        bundle: DataBundle,
+        origin_name: str,
+        destination_name: str,
+        departure_after: datetime,
+        path_payload: dict,
+    ) -> dict:
+        if not self.navitia.enabled:
+            return path_payload
+
+        origin_stop = self._resolve_rail_stop(bundle, origin_name)
+        destination_stop = self._resolve_rail_stop(bundle, destination_name)
+        if origin_stop is None or destination_stop is None:
+            return path_payload
+
+        cache_key = (
+            normalize_text(origin_name),
+            normalize_text(destination_name),
+            departure_after.isoformat(timespec="minutes"),
+        )
+        if cache_key not in self._ter_price_cache:
+            planned = self.navitia.plan_from_station(
+                origin=origin_stop,
+                target_latitude=destination_stop.latitude,
+                target_longitude=destination_stop.longitude,
+                departure_after=departure_after,
+            )
+            self._ter_price_cache[cache_key] = planned.get("price") if planned else None
+
+        price = self._ter_price_cache[cache_key]
+        if price is None:
+            return path_payload
+
+        path_payload["price"] = price
+        path_payload["price_label"] = price.get("label")
+        path_payload["price_status"] = "available"
+        return path_payload
 
     def _active_rail_service_ids(self, bundle: DataBundle, travel_date: date) -> set[str]:
         active_service_ids: set[str] = set()

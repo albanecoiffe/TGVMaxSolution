@@ -440,12 +440,39 @@ body {
   justify-items: end;
 }
 
+.segment-actions {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: end;
+  text-align: right;
+}
+
+.segment-kind {
+  display: inline-flex;
+  margin-top: 0.35rem;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  background: rgba(15, 122, 115, 0.12);
+  color: #0f7a73;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .result-pill {
   border-radius: 999px;
   padding: 0.35rem 0.65rem;
   background: var(--accent-soft);
   color: var(--accent-dark);
   font-size: 0.85rem;
+}
+
+.result-pill-link {
+  text-decoration: none;
+  border: 1px solid rgba(219, 95, 50, 0.18);
+}
+
+.result-pill-link:hover {
+  background: rgba(219, 95, 50, 0.18);
 }
 
 .live-status-note {

@@ -6,7 +6,7 @@ import requests
 
 from app.config import Settings
 from app.models import StationRecord
-from app.utils import duration_minutes
+from app.utils import duration_minutes, format_price
 
 
 class NavitiaClient:
@@ -87,7 +87,24 @@ class NavitiaClient:
             "departure_time": departure.strftime("%H:%M"),
             "arrival_time": arrival.strftime("%H:%M"),
             "duration_minutes": duration_minutes(departure, arrival),
+            "price": self._parse_fare(journey.get("fare")),
             "sections": sections_output,
+        }
+
+    @staticmethod
+    def _parse_fare(fare: dict | None) -> dict | None:
+        if not fare or not fare.get("found"):
+            return None
+        total = fare.get("total") or {}
+        amount = total.get("value")
+        currency = total.get("currency")
+        label = format_price(amount, currency)
+        if label is None:
+            return None
+        return {
+            "amount": str(amount),
+            "currency": str(currency).upper(),
+            "label": label,
         }
 
     @staticmethod
@@ -98,4 +115,3 @@ class NavitiaClient:
             return datetime.strptime(value, "%Y%m%dT%H%M%S")
         except ValueError:
             return None
-

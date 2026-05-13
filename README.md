@@ -35,7 +35,7 @@ make refresh
 
 ## Variables utiles
 
-- `SNCF_API_TOKEN` : active les calculs hybrides via API SNCF/Navitia.
+- `SNCF_API_TOKEN` : enrichit le mode `MAX + TER` avec les prix TER via l'API SNCF/Navitia.
 - `MAX_EXPLORER_REFRESH_HOURS` : frequence de refresh du cache local.
 - `MAX_EXPLORER_DATA_DIR` : emplacement du cache local.
 - `MAX_EXPLORER_SNCF_GTFS_URL` : URL du zip GTFS SNCF ouvert.
@@ -43,6 +43,8 @@ make refresh
 ## Activer le mode MAX + TER
 
 Par defaut, l'application charge le GTFS SNCF ouvert pour proposer automatiquement les prolongements ferroviaires apres les trajets MAX.
+Si `SNCF_API_TOKEN` est renseigne, les resultats affichent aussi le prix TER quand l'API SNCF/Navitia le renvoie.
+Sinon, l'interface affiche un lien direct vers la recherche SNCF Connect du prolongement TER pour verifier le tarif.
 
 ## Lancer les tests
 

@@ -190,7 +190,41 @@ def test_hybrid_itineraries_can_use_open_gtfs_without_token(planner):
     assert result["via_max_station"] == "LYON PART DIEU"
     assert result["ter_extension"]["departure_time"] == "08:30"
     assert result["ter_extension"]["arrival_time"] == "12:00"
+    assert result["ter_extension"]["price"] is None
+    assert result["ter_extension"]["price_status"] == "unavailable"
+    assert result["ter_extension"]["booking_url"].startswith("https://www.sncf-connect.com/home/search?userInput=")
+    assert result["ter_extension"]["sections"][0]["departure_time"] == "08:30"
+    assert result["ter_extension"]["sections"][0]["arrival_time"] == "10:35"
+    assert result["ter_extension"]["sections"][0]["booking_url"].startswith(
+        "https://www.sncf-connect.com/home/search?userInput="
+    )
     assert result["ter_extension"]["sections"][-1]["to"] == "CHAMONIX MONT BLANC"
+
+
+def test_hybrid_itineraries_can_include_ter_price_when_navitia_is_enabled(planner, settings, monkeypatch):
+    settings.sncf_api_token = "test-token"
+    monkeypatch.setattr(
+        planner.navitia,
+        "plan_from_station",
+        lambda **_: {
+            "price": {
+                "amount": "19.50",
+                "currency": "EUR",
+                "label": "19,50 EUR",
+            }
+        },
+    )
+
+    payload = planner.hybrid_itineraries("Paris", date(2026, 5, 23))
+
+    result = next(item for item in payload["results"] if item["destination"] == "CHAMONIX MONT BLANC")
+    assert result["ter_extension"]["price"] == {
+        "amount": "19.50",
+        "currency": "EUR",
+        "label": "19,50 EUR",
+    }
+    assert result["ter_extension"]["price_label"] == "19,50 EUR"
+    assert result["ter_extension"]["price_status"] == "available"
 
 
 def test_hybrid_itineraries_can_mark_destination_also_available_in_direct_max(planner):
