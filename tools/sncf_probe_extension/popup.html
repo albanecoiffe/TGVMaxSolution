@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <title>SNCF Probe</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 12px;
+        width: 380px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 8px;
+      }
+      p {
+        font-size: 12px;
+        margin: 0 0 10px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .form {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+      }
+      input {
+        box-sizing: border-box;
+        padding: 6px 8px;
+        width: 100%;
+      }
+      button {
+        cursor: pointer;
+      }
+      #status {
+        color: #444;
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+      #watch-summary {
+        background: #f7f7f7;
+        border: 1px solid #ddd;
+        font-size: 11px;
+        margin-bottom: 8px;
+        padding: 8px;
+      }
+      .summary-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .summary-chip {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 999px;
+        padding: 3px 8px;
+      }
+      #watches {
+        border: 1px solid #ddd;
+        margin-bottom: 12px;
+        max-height: 260px;
+        overflow: auto;
+        padding: 8px;
+      }
+      .watch {
+        border-top: 1px solid #eee;
+        font-size: 11px;
+        padding: 8px 0;
+      }
+      .watch:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .watch-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .watch-actions {
+        display: flex;
+        gap: 6px;
+      }
+      .watch-route {
+        font-weight: 600;
+      }
+      .watch-highlights {
+        color: #333;
+        margin-top: 4px;
+      }
+      .watch-highlights strong {
+        color: #000;
+      }
+      .watch-history {
+        margin-top: 6px;
+      }
+      .watch-history-title {
+        color: #444;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .watch-history-list {
+        color: #666;
+        font-size: 11px;
+        margin-top: 2px;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-height: 320px;
+        overflow: auto;
+      }
+      li {
+        border-top: 1px solid #ddd;
+        font-size: 11px;
+        padding: 8px 0;
+      }
+      .meta {
+        color: #666;
+      }
+      code {
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>SNCF Connect Probe</h1>
+    <p>Capture les appels `fetch` et `XHR` visibles depuis la session navigateur courante.</p>
+    <div class="actions">
+      <button id="refresh">Rafraichir</button>
+      <button id="replay">Rejouer</button>
+      <button id="replay-custom">Rejouer avec params</button>
+      <button id="watch">Surveiller</button>
+      <button id="watch-now">Verifier maintenant</button>
+      <button id="export">Exporter JSON</button>
+      <button id="clear">Vider</button>
+    </div>
+    <div class="form">
+      <label>
+        Origine
+        <input id="origin-label" type="text" placeholder="Paris Montparnasse">
+      </label>
+      <label>
+        Destination
+        <input id="destination-label" type="text" placeholder="Bordeaux Saint-Jean">
+      </label>
+      <label>
+        Date / heure depart
+        <input id="outward-datetime" type="datetime-local">
+      </label>
+      <label>
+        Backend live-watch
+        <input id="backend-base-url" type="url" placeholder="http://127.0.0.1:8000">
+      </label>
+      <div id="watch-hint" style="font-size: 11px; color: #666;"></div>
+    </div>
+    <div id="status"></div>
+    <div id="watch-summary"></div>
+    <div id="watches"></div>
+    <pre id="replay-result" style="white-space: pre-wrap; font-size: 11px; background: #f7f7f7; padding: 8px; border: 1px solid #ddd; max-height: 220px; overflow: auto;"></pre>
+    <ul id="events"></ul>
+    <script src="popup.js"></script>
+  </body>
+</html>

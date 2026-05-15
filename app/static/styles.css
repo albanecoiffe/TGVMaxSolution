@@ -159,7 +159,7 @@ body {
 
 .section-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.9rem;
   margin-bottom: 1.5rem;
 }
@@ -257,6 +257,155 @@ body {
 .actions {
   display: flex;
   gap: 0.8rem;
+}
+
+.live-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.live-stat {
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 0.95rem 1rem;
+}
+
+.live-stat-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-bottom: 0.3rem;
+}
+
+.live-stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.live-watch-layout {
+  display: grid;
+  gap: 1rem;
+}
+
+.live-watch-panel {
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 1.1rem 1.2rem;
+}
+
+.live-watch-panel h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+}
+
+.activity-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.activity-item {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+}
+
+.activity-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.watch-grid {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.watch-card {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 1rem;
+}
+
+.watch-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.watch-badges,
+.watch-history {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+
+.watch-badge,
+.history-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  background: rgba(255, 255, 255, 0.86);
+  font-size: 0.85rem;
+}
+
+.watch-badge.is-alert {
+  border-color: rgba(219, 95, 50, 0.34);
+  background: rgba(219, 95, 50, 0.1);
+}
+
+.watch-badge.is-error {
+  border-color: rgba(155, 59, 210, 0.28);
+  background: rgba(155, 59, 210, 0.1);
+}
+
+.live-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.plan-group-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.plan-group {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.plan-group h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.98rem;
+}
+
+.plan-group-dates {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+
+.plan-date-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.28rem 0.6rem;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 0.82rem;
+}
+
+.plan-date-chip.is-synced {
+  border-color: rgba(15, 122, 115, 0.28);
+  background: rgba(15, 122, 115, 0.08);
+}
+
+.plan-date-chip.is-pending {
+  border-color: rgba(36, 31, 26, 0.12);
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .primary-button,

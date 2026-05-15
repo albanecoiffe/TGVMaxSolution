@@ -23,6 +23,30 @@ make backend
 
 Puis ouvrir [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
+## Hebergement Render
+
+Le depot contient un fichier [render.yaml](/Users/albanecoiffe/Library/Mobile%20Documents/com~apple~CloudDocs/Documents/tgvmax/render.yaml:1) pour deployer l'application web sur Render.
+
+Important :
+
+- Render peut heberger le site, le plan de surveillance, l'historique et les futures alertes.
+- Render ne remplace pas a lui seul le moteur navigateur SNCF Connect.
+- Le moteur live depend encore d'un vrai navigateur avec une vraie session SNCF Connect.
+
+Architecture cible :
+
+1. Render heberge l'application web.
+2. Un worker navigateur dedie execute l'extension en continu.
+3. L'extension pousse :
+   - l'etat des surveillances vers `/api/live-watch/ingest`
+   - le heartbeat du worker vers `/api/live-worker/heartbeat`
+4. La page `/live-watch` affiche :
+   - le plan de surveillance
+   - l'etat persistant des checks
+   - le statut du worker
+
+Le champ `Backend live-watch` de l'extension peut pointer soit vers le backend local, soit vers l'URL Render.
+
 ## Commandes Make utiles
 
 ```bash
@@ -51,6 +75,29 @@ Sinon, l'interface affiche un lien direct vers la recherche SNCF Connect du prol
 ```bash
 uv run pytest
 ```
+
+## POC session navigateur reelle
+
+Un POC d'observation reseau pour SNCF Connect est disponible dans [tools/sncf_probe_extension/README.md](/Users/albanecoiffe/Library/Mobile%20Documents/com~apple~CloudDocs/Documents/tgvmax/tools/sncf_probe_extension/README.md:1).
+
+Cette extension Chrome/Chromium ne scrape pas le HTML et ne lance pas de headless. Elle hooke `fetch` et `XMLHttpRequest` dans une session humaine deja ouverte afin de capturer les appels reseau visibles par le front SNCF Connect.
+
+Pour inspecter un export ensuite :
+
+```bash
+PYTHONPATH=. python3 tools/inspect_sncf_probe.py tools/sncf-probe-YYYY-MM-DDTHH-MM-SS.json --write-redacted
+```
+
+Le script resume les appels `bff/api/v1/itineraries` et peut ecrire une copie `.redacted.json` en supprimant les champs sensibles connus.
+
+Pour rejouer un appel `itineraries` a partir d'un export :
+
+```bash
+python3 tools/replay_sncf_itineraries.py tools/sncf-probe-YYYY-MM-DDTHH-MM-SS.json
+python3 tools/replay_sncf_itineraries.py tools/sncf-probe-YYYY-MM-DDTHH-MM-SS.json --outward-datetime 2026-05-18T15:38:00.000Z --execute
+```
+
+Sans `--execute`, le script affiche le template reconstruit. Avec `--execute`, il envoie vraiment le `POST` vers `bff/api/v1/itineraries` avec les headers/session capturés dans le probe.
 
 ## Notes
 

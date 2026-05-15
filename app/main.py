@@ -8,6 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import Settings
+from app.services.live_watch import LiveWatchStore
+from app.services.live_watch_plan import LiveWatchPlanStore
+from app.services.live_worker import LiveWorkerStore
 from app.services.planner import TravelPlanner
 
 
@@ -70,6 +73,17 @@ PAGES = {
             "max_connections",
         ],
     },
+    "live_watch": {
+        "key": "live_watch",
+        "path": "/live-watch",
+        "label": "Surveillance live",
+        "hero_title": "Suivre les trajets 0 EUR detectes par la surveillance navigateur.",
+        "hero_text": "Cette page affiche l'etat persistant des surveillances live poussees depuis l'extension navigateur vers l'application locale.",
+        "map_help": "La carte n'est pas utilisee pour la surveillance live. Utilise le panneau principal pour suivre les apparitions et disparitions de 0 EUR.",
+        "result_title": "Surveillance live SNCF Connect",
+        "result_help": "Etat persistant des checks realises depuis ton navigateur reel.",
+        "fields": [],
+    },
 }
 
 
@@ -99,6 +113,9 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or Settings()
     planner = TravelPlanner(app_settings)
+    live_watch_store = LiveWatchStore(app_settings)
+    live_watch_plan_store = LiveWatchPlanStore(app_settings)
+    live_worker_store = LiveWorkerStore(app_settings)
 
     app = FastAPI(title=app_settings.app_name)
     app.state.settings = app_settings
@@ -123,6 +140,10 @@ def create_app(
     def page_hybrid(request: Request):
         return templates.TemplateResponse(request, "index.html", _page_context(request, planner, "hybrid"))
 
+    @app.get("/live-watch", response_class=HTMLResponse)
+    def page_live_watch(request: Request):
+        return templates.TemplateResponse(request, "index.html", _page_context(request, planner, "live_watch"))
+
     @app.get("/api/meta")
     def meta():
         return planner.meta()
@@ -134,6 +155,36 @@ def create_app(
     @app.get("/api/watch/latest")
     def watch_latest():
         return planner.latest_zero_watch()
+
+    @app.get("/api/live-watch/latest")
+    def live_watch_latest():
+        return live_watch_store.latest()
+
+    @app.post("/api/live-watch/ingest")
+    async def live_watch_ingest(request: Request):
+        payload = await request.json()
+        return live_watch_store.ingest(payload)
+
+    @app.get("/api/live-watch/plan")
+    def live_watch_plan():
+        return live_watch_plan_store.latest()
+
+    @app.post("/api/live-watch/plan/default-weekend-bordeaux-paris")
+    def live_watch_plan_default_weekend_bordeaux_paris():
+        return live_watch_plan_store.build_default_weekend_plan(planner.meta()["available_dates"])
+
+    @app.post("/api/live-watch/plan/clear")
+    def live_watch_plan_clear():
+        return live_watch_plan_store.clear()
+
+    @app.get("/api/live-worker/latest")
+    def live_worker_latest():
+        return live_worker_store.latest()
+
+    @app.post("/api/live-worker/heartbeat")
+    async def live_worker_heartbeat(request: Request):
+        payload = await request.json()
+        return live_worker_store.ingest(payload)
 
     @app.get("/api/stations")
     def stations(q: str = Query("", min_length=1)):

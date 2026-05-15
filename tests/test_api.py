@@ -143,6 +143,7 @@ def test_section_pages_render(settings):
         ("/aller-retour-journee", "Aller-retour journee"),
         ("/correspondances-max", "Correspondances MAX"),
         ("/max-ter", "MAX + TER"),
+        ("/live-watch", "Surveillance live SNCF Connect"),
     ]
 
     for path, title in routes:
@@ -190,3 +191,137 @@ def test_refresh_endpoint_returns_zero_watch_diff_and_latest_watch(settings):
     latest_payload = latest_watch.json()
     assert latest_payload["new_zero_count"] == 1
     assert latest_payload["removed_zero_count"] == 1
+
+
+def test_live_watch_ingest_and_latest(settings):
+    client = TestClient(create_app(settings))
+
+    empty_response = client.get("/api/live-watch/latest")
+    assert empty_response.status_code == 200
+    assert empty_response.json()["has_live_watch"] is False
+
+    payload = {
+        "source": "sncf-probe-extension",
+        "captured_at": "2026-05-15T08:50:00Z",
+        "summary": {
+            "watch_count": 2,
+            "ok_count": 1,
+            "error_count": 1,
+            "waiting_count": 0,
+            "zero_watch_count": 1,
+            "zero_offer_count": 2,
+        },
+        "watches": [
+            {
+                "id": "Paris|Bordeaux|2026-05-23",
+                "origin_label": "Paris Montparnasse",
+                "destination_label": "Bordeaux Saint-Jean",
+                "watch_date": "2026-05-23",
+                "status": "ok",
+                "zero_offer_count": 2,
+                "check_count": 4,
+                "success_count": 4,
+                "last_checked_at": "2026-05-15T08:49:00Z",
+                "last_success_at": "2026-05-15T08:49:00Z",
+                "last_alert_at": "2026-05-15T08:40:00Z",
+                "last_error": None,
+                "zero_offers": [
+                    {"travelId": "A"},
+                    {"travelId": "B"},
+                ],
+                "history": [
+                    {"type": "zero_added", "at": "2026-05-15T08:40:00Z", "count": 2},
+                    {"type": "check_ok", "at": "2026-05-15T08:49:00Z", "zeroOfferCount": 2},
+                ],
+            },
+            {
+                "id": "Paris|Bordeaux|2026-05-30",
+                "origin_label": "Paris Montparnasse",
+                "destination_label": "Bordeaux Saint-Jean",
+                "watch_date": "2026-05-30",
+                "status": "error",
+                "zero_offer_count": 0,
+                "check_count": 2,
+                "success_count": 1,
+                "last_checked_at": "2026-05-15T08:49:00Z",
+                "last_success_at": "2026-05-15T08:20:00Z",
+                "last_alert_at": None,
+                "last_error": "Replay impossible",
+                "zero_offers": [],
+                "history": [
+                    {"type": "check_error", "at": "2026-05-15T08:49:00Z", "error": "Replay impossible"},
+                ],
+            },
+        ],
+    }
+
+    ingest_response = client.post("/api/live-watch/ingest", json=payload)
+    assert ingest_response.status_code == 200
+    ingest_payload = ingest_response.json()
+    assert ingest_payload["has_live_watch"] is True
+    assert ingest_payload["summary"]["watch_count"] == 2
+    assert len(ingest_payload["recent_activity"]) == 3
+
+    latest_response = client.get("/api/live-watch/latest")
+    assert latest_response.status_code == 200
+    latest_payload = latest_response.json()
+    assert latest_payload["has_live_watch"] is True
+    assert latest_payload["summary"]["zero_offer_count"] == 2
+    assert latest_payload["recent_activity"][0]["type"] == "check_ok"
+
+
+def test_live_watch_default_weekend_plan_and_clear(settings):
+    client = TestClient(create_app(settings))
+
+    empty_plan = client.get("/api/live-watch/plan")
+    assert empty_plan.status_code == 200
+    assert empty_plan.json()["has_plan"] is False
+
+    create_plan = client.post("/api/live-watch/plan/default-weekend-bordeaux-paris")
+    assert create_plan.status_code == 200
+    plan_payload = create_plan.json()
+    assert plan_payload["has_plan"] is True
+    assert plan_payload["watch_count"] > 0
+    assert any(item["destination_label"] == "Bordeaux Saint-Jean" for item in plan_payload["watches"])
+    assert any(item["destination_label"] == "Paris Montparnasse" for item in plan_payload["watches"])
+
+    latest_plan = client.get("/api/live-watch/plan")
+    assert latest_plan.status_code == 200
+    assert latest_plan.json()["has_plan"] is True
+
+    clear_plan = client.post("/api/live-watch/plan/clear")
+    assert clear_plan.status_code == 200
+    assert clear_plan.json()["has_plan"] is False
+
+
+def test_live_worker_heartbeat_and_latest(settings):
+    client = TestClient(create_app(settings))
+
+    empty_worker = client.get("/api/live-worker/latest")
+    assert empty_worker.status_code == 200
+    assert empty_worker.json()["has_worker"] is False
+
+    heartbeat = {
+        "captured_at": "2026-05-15T09:30:00Z",
+        "backend_base_url": "https://max-explorer.onrender.com",
+        "status": "ok",
+        "watch_tab_url": "https://www.sncf-connect.com/home/search",
+        "watch_tab_id": 123,
+        "watch_count": 19,
+        "browser_open": True,
+        "sncf_tab_ready": True,
+        "last_error": None,
+        "session_hint": "session_sncf_active",
+    }
+
+    heartbeat_response = client.post("/api/live-worker/heartbeat", json=heartbeat)
+    assert heartbeat_response.status_code == 200
+    payload = heartbeat_response.json()
+    assert payload["has_worker"] is True
+    assert payload["worker"]["status"] == "ok"
+    assert payload["backend_base_url"] == "https://max-explorer.onrender.com"
+
+    latest_worker = client.get("/api/live-worker/latest")
+    assert latest_worker.status_code == 200
+    latest_payload = latest_worker.json()
+    assert latest_payload["worker"]["watch_count"] == 19

@@ -3,4 +3,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 data/cache/
-
+data/browser-profile/
+data/history/
+tools/sncf-probe-*.json
+tools/sncf-probe-*.redacted.json

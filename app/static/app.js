@@ -49,6 +49,7 @@ const PAGE_LEGENDS = {
     { kind: "via", label: "Gare MAX" },
     { kind: "target", label: "Destination finale" },
   ],
+  live_watch: [],
 };
 
 let map;
@@ -96,6 +97,15 @@ function setDefaultInputs() {
 
 async function apiGet(url) {
   const response = await fetch(url);
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.detail || payload.reason || "Erreur de chargement");
+  }
+  return payload;
+}
+
+async function apiPost(url) {
+  const response = await fetch(url, { method: "POST" });
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.detail || payload.reason || "Erreur de chargement");
@@ -435,6 +445,16 @@ function bindSelectableCards() {
 
 function updateResultActions() {
   if (!resultActions) {
+    return;
+  }
+
+  if (page.key === "live_watch") {
+    resultActions.innerHTML = `
+      <div class="result-actions-stack">
+        <span class="live-status-note">Cette page lit l'etat persistant pousse par l'extension navigateur vers l'application locale.</span>
+        <span class="live-status-note">Elle se recharge automatiquement toutes les 30 secondes.</span>
+      </div>
+    `;
     return;
   }
 
@@ -1199,9 +1219,317 @@ function renderHybrid(payload) {
   );
 }
 
+async function renderLiveWatch(payload) {
+  currentDirectTrips = [];
+  updateResultActions();
+
+  if (!payload?.has_live_watch) {
+    resultSummary.textContent = payload?.message || "Aucune surveillance live disponible.";
+    resultsContainer.innerHTML = emptyState(
+      "Aucune synchronisation live n'a encore ete recue. Lance une verification depuis l'extension pour alimenter cette page."
+    );
+    renderMapModel({ points: [], legend: PAGE_LEGENDS.live_watch }, { focusSelection: false, scrollSelection: false });
+    return;
+  }
+
+  const summary = payload.summary || {};
+  const watches = payload.watches || [];
+  const activity = payload.recent_activity || [];
+  const capturedAt = payload.captured_at ? formatDateTime(payload.captured_at) : "inconnue";
+  let plan = null;
+  let worker = null;
+  try {
+    plan = await apiGet("/api/live-watch/plan");
+  } catch (_error) {
+    plan = null;
+  }
+  try {
+    worker = await apiGet("/api/live-worker/latest");
+  } catch (_error) {
+    worker = null;
+  }
+
+  resultSummary.textContent = `${summary.watch_count || 0} surveillance(s) | ${summary.zero_watch_count || 0} avec 0 € | ${summary.zero_offer_count || 0} train(s) 0 € visibles | derniere sync ${capturedAt}`;
+  const planLabel = plan?.has_plan
+    ? `${plan.watch_count || plan.watches?.length || 0} surveillance(s) planifiee(s)`
+    : "Aucun plan automatique actif";
+  const planGroups = groupPlanWatches(plan?.watches || [], watches);
+  const planCounts = plannedVsActiveCounts(plan?.watches || [], watches);
+
+  const summaryHtml = `
+    <div class="live-plan-actions">
+      <button type="button" class="primary-button" id="activate-default-plan">Activer Bordeaux/Paris weekend</button>
+      <button type="button" class="secondary-button" id="clear-default-plan">Supprimer le plan</button>
+      <span class="live-status-note">${escapeHtml(planLabel)}</span>
+      ${
+        plan?.has_plan
+          ? `<span class="live-status-note">${planCounts.activeCount}/${planCounts.plannedCount} prises en charge par l'extension</span>`
+          : ""
+      }
+    </div>
+    <section class="live-summary-grid">
+      <div class="live-stat"><div class="live-stat-label">Surveillances</div><div class="live-stat-value">${summary.watch_count || 0}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Checks OK</div><div class="live-stat-value">${summary.ok_count || 0}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Watches avec 0 €</div><div class="live-stat-value">${summary.zero_watch_count || 0}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Trains 0 € visibles</div><div class="live-stat-value">${summary.zero_offer_count || 0}</div></div>
+    </section>
+  `;
+
+  const workerHtml = worker?.has_worker
+    ? `
+      <div class="activity-item">
+        <strong>Statut worker</strong>
+        <div class="muted">${escapeHtml(formatDateTime(worker.captured_at))} | ${escapeHtml(worker.worker?.status || "unknown")}</div>
+        <div>${escapeHtml(worker.worker?.session_hint || "")}</div>
+        <div class="muted">Backend ${escapeHtml(worker.backend_base_url || "")}</div>
+        ${worker.worker?.last_error ? `<div>${escapeHtml(worker.worker.last_error)}</div>` : ""}
+      </div>
+    `
+    : `<div class="empty-state">Aucun heartbeat worker recu.</div>`;
+
+  const activityHtml = activity.length
+    ? activity
+        .map(
+          (item) => `
+            <div class="activity-item">
+              <strong>${escapeHtml(item.route || "Trajet")}</strong>
+              <div class="muted">${escapeHtml(item.watch_date || "")} | ${escapeHtml(formatDateTime(item.at))}</div>
+              <div>${escapeHtml(historyLabelFromApi(item))}</div>
+            </div>
+          `
+        )
+        .join("")
+    : `<div class="empty-state">Aucune activite recente.</div>`;
+
+  const watchHtml = watches.length
+    ? watches
+        .map((watch) => {
+          const zeroOffers = watch.zero_offers || [];
+          const departureList = zeroOffers.map((offer) => offer.departureTime).filter(Boolean).slice(0, 5).join(", ");
+          return `
+            <article class="watch-card">
+              <h3>${escapeHtml(watch.origin_label)} -> ${escapeHtml(watch.destination_label)}</h3>
+              <p class="muted">${escapeHtml(formatWatchDate(watch.watch_date))} | statut ${escapeHtml(watch.status || "pending")} | checks ${watch.check_count || 0} | succes ${watch.success_count || 0}</p>
+              <div class="watch-badges">
+                <span class="watch-badge${watch.zero_offer_count ? " is-alert" : ""}">${watch.zero_offer_count || 0} train(s) a 0 €</span>
+                <span class="watch-badge">Dernier succes ${escapeHtml(formatDateTime(watch.last_success_at))}</span>
+                ${
+                  watch.last_error
+                    ? `<span class="watch-badge is-error">${escapeHtml(watch.last_error)}</span>`
+                    : ""
+                }
+              </div>
+              ${
+                departureList
+                  ? `<div class="watch-history"><span class="history-chip">Departs 0 €: ${escapeHtml(departureList)}</span></div>`
+                  : ""
+              }
+              ${
+                (watch.history || []).length
+                  ? `
+                    <div class="watch-history">
+                      ${(watch.history || [])
+                        .slice(0, 4)
+                        .map(
+                          (entry) => `
+                            <span class="history-chip">${escapeHtml(formatDateTime(entry.at))} · ${escapeHtml(historyLabel(entry))}</span>
+                          `
+                        )
+                        .join("")}
+                    </div>
+                  `
+                  : ""
+              }
+            </article>
+          `;
+        })
+        .join("")
+    : `<div class="empty-state">Aucune surveillance synchronisee.</div>`;
+
+  const planHtml = planGroups.length
+    ? planGroups
+        .map(
+          (group) => `
+            <article class="plan-group">
+              <h4>${escapeHtml(group.route)}</h4>
+              <div class="muted">${group.dates.length} date(s) planifiee(s)${group.ruleLabel ? ` | regle ${escapeHtml(group.ruleLabel)}` : ""}</div>
+              <div class="plan-group-dates">
+                ${group.dates
+                  .map(
+                    (item) => `
+                      <span class="plan-date-chip${item.isSynced ? " is-synced" : " is-pending"}">
+                        ${escapeHtml(formatWatchDate(item.watchDate))}${item.isSynced ? " · prise en charge" : " · planifiee"}
+                      </span>
+                    `
+                  )
+                  .join("")}
+              </div>
+            </article>
+          `
+        )
+        .join("")
+    : `<div class="empty-state">Aucun plan automatique configure.</div>`;
+
+  resultsContainer.innerHTML = `
+    ${summaryHtml}
+    <section class="live-watch-layout">
+      <article class="live-watch-panel">
+        <h3>Worker navigateur</h3>
+        <div class="activity-list">${workerHtml}</div>
+      </article>
+      <article class="live-watch-panel">
+        <h3>Plan actif</h3>
+        <div class="plan-group-list">${planHtml}</div>
+      </article>
+      <article class="live-watch-panel">
+        <h3>Activite recente</h3>
+        <div class="activity-list">${activityHtml}</div>
+      </article>
+      <article class="live-watch-panel">
+        <h3>Surveillances</h3>
+        <div class="watch-grid">${watchHtml}</div>
+      </article>
+    </section>
+  `;
+
+  document.getElementById("activate-default-plan")?.addEventListener("click", async () => {
+    setLoadingState(true);
+    try {
+      await apiPost("/api/live-watch/plan/default-weekend-bordeaux-paris");
+      resultSummary.textContent = "Plan active. L'extension l'adoptera automatiquement au prochain cycle, en general sous 1 minute.";
+      await loadCurrentPage();
+    } finally {
+      setLoadingState(false);
+    }
+  });
+
+  document.getElementById("clear-default-plan")?.addEventListener("click", async () => {
+    setLoadingState(true);
+    try {
+      await apiPost("/api/live-watch/plan/clear");
+      await loadCurrentPage();
+    } finally {
+      setLoadingState(false);
+    }
+  });
+
+  renderMapModel({ points: [], legend: PAGE_LEGENDS.live_watch }, { focusSelection: false, scrollSelection: false });
+}
+
+function historyLabel(entry) {
+  switch (entry?.type) {
+    case "zero_added":
+      return `Nouveau 0 €: ${entry.count || 0} train(s)`;
+    case "zero_removed":
+      return `0 € retire: ${entry.count || 0} train(s)`;
+    case "check_error":
+      return `Erreur: ${entry.error || "Replay impossible"}`;
+    case "check_ok":
+      return `Check OK: ${entry.zeroOfferCount || entry.zero_offer_count || 0} train(s) a 0 €`;
+    default:
+      return "Evenement";
+  }
+}
+
+function historyLabelFromApi(item) {
+  return historyLabel({
+    type: item?.type,
+    ...(item?.details || {}),
+  });
+}
+
+function groupPlanWatches(planWatches = [], activeWatches = []) {
+  const activeIds = new Set((activeWatches || []).map((watch) => watch.id));
+  const groups = new Map();
+
+  for (const watch of planWatches) {
+    const route = `${watch.origin_label} -> ${watch.destination_label}`;
+    if (!groups.has(route)) {
+      groups.set(route, {
+        route,
+        ruleLabel: watch.rule_label || null,
+        dates: [],
+      });
+    }
+    groups.get(route).dates.push({
+      watchDate: watch.watch_date,
+      isSynced: activeIds.has(watch.id),
+    });
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      dates: group.dates.sort((left, right) => (left.watchDate || "").localeCompare(right.watchDate || "")),
+    }))
+    .sort((left, right) => left.route.localeCompare(right.route));
+}
+
+function plannedVsActiveCounts(planWatches = [], activeWatches = []) {
+  const activeIds = new Set((activeWatches || []).map((watch) => watch.id));
+  let activeCount = 0;
+  for (const watch of planWatches || []) {
+    if (activeIds.has(watch.id)) {
+      activeCount += 1;
+    }
+  }
+  return {
+    plannedCount: (planWatches || []).length,
+    activeCount,
+  };
+}
+
+function formatWatchDate(value) {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value);
+  }
+  return new Intl.DateTimeFormat("fr-FR", {
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(parsed);
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "jamais";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value);
+  }
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
 async function loadCurrentPage() {
   const params = syncUrlAndNav();
   const values = getParamsObject();
+
+  if (page.key === "live_watch") {
+    resultSummary.textContent = "Chargement...";
+    setLoadingState(true);
+    try {
+      const payload = await apiGet("/api/live-watch/latest");
+      await renderLiveWatch(payload);
+    } catch (error) {
+      resultSummary.textContent = error.message;
+      resultsContainer.innerHTML = emptyState(error.message);
+      renderMapModel({ points: [], legend: PAGE_LEGENDS.live_watch }, { focusSelection: false, scrollSelection: false });
+    } finally {
+      setLoadingState(false);
+    }
+    return;
+  }
 
   if (!values.origin || !values.date) {
     resultSummary.textContent = "Renseigne au moins un depart et une date.";
@@ -1354,5 +1682,16 @@ document.addEventListener("DOMContentLoaded", () => {
     loadCurrentPage();
   });
 
-  refreshButton.addEventListener("click", refreshData);
+  if (page.key === "live_watch") {
+    refreshButton.textContent = "Rafraichir la surveillance";
+    refreshButton.addEventListener("click", loadCurrentPage);
+  } else {
+    refreshButton.addEventListener("click", refreshData);
+  }
+
+  if (page.key === "live_watch") {
+    window.setInterval(() => {
+      loadCurrentPage();
+    }, 30_000);
+  }
 });
