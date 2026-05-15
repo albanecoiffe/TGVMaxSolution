@@ -89,6 +89,66 @@ PAGES = {
 }
 
 
+def _cache_key(*parts: object) -> str:
+    return "|".join(str(part or "") for part in parts)
+
+
+def _prewarm_common_queries(planner: TravelPlanner, query_cache: QueryCache) -> None:
+    try:
+        meta = planner.meta()
+        travel_date = meta.get("date_min")
+        if not travel_date:
+            return
+
+        origin = "Paris"
+        query_cache.set(
+            _cache_key("direct", origin, travel_date, "", "False"),
+            planner.direct_trips(
+                origin_query=origin,
+                travel_date=date.fromisoformat(travel_date),
+                return_date=None,
+                include_returns=False,
+            ),
+        )
+        query_cache.set(
+            _cache_key("day_trips", origin, travel_date, "", "240", "23:30"),
+            planner.day_trip_destinations(
+                origin_query=origin,
+                travel_date=date.fromisoformat(travel_date),
+                return_date=None,
+                min_stay_minutes=240,
+                latest_return_time="23:30",
+            ),
+        )
+        query_cache.set(
+            _cache_key("routes_max", origin, travel_date, "", "2", "25", ""),
+            planner.max_itineraries(
+                origin_query=origin,
+                travel_date=date.fromisoformat(travel_date),
+                return_date=None,
+                max_connections=2,
+                min_connection_minutes=25,
+                max_connection_minutes=None,
+                min_connections=1,
+            ),
+        )
+        if meta.get("hybrid_enabled"):
+            hybrid_payload = planner.hybrid_itineraries(
+                origin_query=origin,
+                travel_date=date.fromisoformat(travel_date),
+                max_connections=2,
+                min_connection_minutes=25,
+                max_connection_minutes=None,
+            )
+            query_cache.set(
+                _cache_key("routes_hybrid", origin, travel_date, "2", "25", ""),
+                hybrid_payload,
+            )
+    except Exception:
+        # Keep startup and refresh resilient on low-resource instances.
+        return
+
+
 def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> dict:
     if page_key == "live_watch":
         meta = {
@@ -144,6 +204,7 @@ def create_app(
         def _warm() -> None:
             try:
                 planner.meta()
+                _prewarm_common_queries(planner, query_cache)
             except Exception:
                 # Keep startup resilient on Render/free cold boots.
                 return
@@ -177,7 +238,13 @@ def create_app(
     @app.post("/api/refresh")
     def refresh():
         query_cache.clear()
-        return planner.refresh()
+        payload = planner.refresh()
+
+        def _warm_after_refresh() -> None:
+            _prewarm_common_queries(planner, query_cache)
+
+        Thread(target=_warm_after_refresh, daemon=True).start()
+        return payload
 
     @app.get("/api/watch/latest")
     def watch_latest():
@@ -229,14 +296,12 @@ def create_app(
         include_returns: bool = True,
     ):
         try:
-            cache_key = "|".join(
-                [
-                    "direct",
-                    origin,
-                    travel_date.isoformat(),
-                    return_date.isoformat() if return_date else "",
-                    str(include_returns),
-                ]
+            cache_key = _cache_key(
+                "direct",
+                origin,
+                travel_date.isoformat(),
+                return_date.isoformat() if return_date else "",
+                str(include_returns),
             )
             cached = query_cache.get(cache_key)
             if cached is not None:
@@ -260,15 +325,13 @@ def create_app(
         latest_return_time: str = "23:30",
     ):
         try:
-            cache_key = "|".join(
-                [
-                    "day_trips",
-                    origin,
-                    travel_date.isoformat(),
-                    return_date.isoformat() if return_date else "",
-                    str(min_stay_minutes),
-                    latest_return_time,
-                ]
+            cache_key = _cache_key(
+                "day_trips",
+                origin,
+                travel_date.isoformat(),
+                return_date.isoformat() if return_date else "",
+                str(min_stay_minutes),
+                latest_return_time,
             )
             cached = query_cache.get(cache_key)
             if cached is not None:
@@ -294,16 +357,14 @@ def create_app(
         max_connection_minutes: int | None = None,
     ):
         try:
-            cache_key = "|".join(
-                [
-                    "routes_max",
-                    origin,
-                    travel_date.isoformat(),
-                    return_date.isoformat() if return_date else "",
-                    str(max_connections),
-                    str(min_connection_minutes),
-                    str(max_connection_minutes or ""),
-                ]
+            cache_key = _cache_key(
+                "routes_max",
+                origin,
+                travel_date.isoformat(),
+                return_date.isoformat() if return_date else "",
+                str(max_connections),
+                str(min_connection_minutes),
+                str(max_connection_minutes or ""),
             )
             cached = query_cache.get(cache_key)
             if cached is not None:
@@ -330,27 +391,25 @@ def create_app(
         max_connection_minutes: int | None = None,
     ):
         try:
-            cache_key = "|".join(
-                [
-                    "routes_hybrid",
-                    origin,
-                    travel_date.isoformat(),
-                    str(max_connections),
-                    str(min_connection_minutes),
-                    str(max_connection_minutes or ""),
-                ]
+            cache_key = _cache_key(
+                "routes_hybrid",
+                origin,
+                travel_date.isoformat(),
+                str(max_connections),
+                str(min_connection_minutes),
+                str(max_connection_minutes or ""),
             )
             cached = query_cache.get(cache_key)
             if cached is not None:
                 payload = cached
             else:
                 payload = planner.hybrid_itineraries(
-                origin_query=origin,
-                travel_date=travel_date,
-                max_connections=max_connections,
-                min_connection_minutes=min_connection_minutes,
-                max_connection_minutes=max_connection_minutes,
-            )
+                    origin_query=origin,
+                    travel_date=travel_date,
+                    max_connections=max_connections,
+                    min_connection_minutes=min_connection_minutes,
+                    max_connection_minutes=max_connection_minutes,
+                )
                 query_cache.set(cache_key, payload)
             if not payload["enabled"]:
                 return JSONResponse(payload, status_code=412)
