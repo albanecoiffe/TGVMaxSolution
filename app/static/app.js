@@ -95,20 +95,52 @@ function setDefaultInputs() {
   }
 }
 
+function extractErrorMessageFromText(text, status) {
+  const normalized = String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return `Erreur HTTP ${status}`;
+  }
+  if (normalized.startsWith("<!DOCTYPE") || normalized.startsWith("<html")) {
+    return `Le serveur a renvoye une page HTML au lieu de JSON (HTTP ${status}).`;
+  }
+  return normalized.slice(0, 240);
+}
+
+async function parseApiResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  const rawText = await response.text();
+  return {
+    detail: extractErrorMessageFromText(rawText, response.status),
+    rawText,
+  };
+}
+
 async function apiGet(url) {
   const response = await fetch(url);
-  const payload = await response.json();
+  const payload = await parseApiResponse(response);
   if (!response.ok) {
     throw new Error(payload.detail || payload.reason || "Erreur de chargement");
+  }
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error(payload.detail || "Le serveur a renvoye une reponse non JSON.");
   }
   return payload;
 }
 
 async function apiPost(url) {
   const response = await fetch(url, { method: "POST" });
-  const payload = await response.json();
+  const payload = await parseApiResponse(response);
   if (!response.ok) {
     throw new Error(payload.detail || payload.reason || "Erreur de chargement");
+  }
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error(payload.detail || "Le serveur a renvoye une reponse non JSON.");
   }
   return payload;
 }
@@ -1633,7 +1665,13 @@ async function refreshData() {
   refreshButton.textContent = "Rafraichissement...";
   try {
     const response = await fetch("/api/refresh", { method: "POST" });
-    const payload = await response.json();
+    const payload = await parseApiResponse(response);
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.reason || "Erreur de rafraichissement");
+    }
+    if (!response.headers.get("content-type")?.includes("application/json")) {
+      throw new Error(payload.detail || "Le serveur a renvoye une reponse non JSON.");
+    }
     await loadCurrentPage();
     const zeroWatch = payload.zero_watch;
     if (zeroWatch) {
@@ -1647,6 +1685,8 @@ async function refreshData() {
       }
       window.alert(parts.join(" "));
     }
+  } catch (error) {
+    resultsContainer.innerHTML = emptyState(error.message || "Erreur de rafraichissement");
   } finally {
     refreshButton.disabled = false;
     refreshButton.textContent = "Rafraichir les donnees";
