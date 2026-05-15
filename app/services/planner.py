@@ -77,6 +77,9 @@ class TravelPlanner:
     def latest_zero_watch(self) -> dict:
         return self.zero_watch.latest_diff()
 
+    def latest_direct_snapshot(self, origin_query: str, travel_date: date) -> dict:
+        return self.zero_watch.latest_direct_snapshot(origin_query, travel_date.isoformat())
+
     def search_stations(self, query: str, limit: int = 12) -> list[dict]:
         bundle = self.repository.get_bundle()
         unique_names = set(bundle.trips["origin"].unique()) | set(bundle.trips["destination"].unique())

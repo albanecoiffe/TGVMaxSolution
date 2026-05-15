@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from hashlib import sha1
 
 import pandas as pd
 
 from app.config import Settings
+from app.utils import normalize_text
 
 
 class ZeroWatch:
@@ -60,6 +62,65 @@ class ZeroWatch:
             "unchanged_zero_count": snapshot["zero_trip_count"],
             "sample_new_trips": [],
             "sample_removed_trips": [],
+        }
+
+    def latest_direct_snapshot(self, origin_query: str, travel_date: str) -> dict:
+        snapshot = self._load_json(self.latest_snapshot_file)
+        if snapshot is None:
+            return {
+                "has_snapshot": False,
+                "message": "aucun snapshot zero EUR n'a encore ete enregistre",
+            }
+
+        query_norm = normalize_text(origin_query)
+        trips = []
+        matched_origins = set()
+        destinations = set()
+
+        for entry in snapshot.get("entries", []):
+            if entry.get("date") != travel_date:
+                continue
+            origin = entry.get("origin", "")
+            origin_norm = normalize_text(origin)
+            if query_norm and query_norm not in origin_norm:
+                continue
+
+            matched_origins.add(origin)
+            destinations.add(entry.get("destination", ""))
+            trips.append(
+                {
+                    "id": sha1(entry["key"].encode("utf-8")).hexdigest()[:16],
+                    "train_no": entry.get("train_no") or "",
+                    "origin": origin,
+                    "destination": entry.get("destination", ""),
+                    "departure_time": entry.get("departure_time", ""),
+                    "arrival_time": entry.get("arrival_time", ""),
+                    "departure_datetime": None,
+                    "arrival_datetime": None,
+                    "duration_minutes": None,
+                    "duration_label": "",
+                    "booking_url": "https://www.sncf-connect.com/home/search/od",
+                    "coordinates": {
+                        "origin": None,
+                        "destination": None,
+                    },
+                }
+            )
+
+        trips.sort(key=lambda item: (item["destination"], item["departure_time"], item["arrival_time"]))
+        return {
+            "has_snapshot": True,
+            "snapshot_only": True,
+            "captured_at": snapshot.get("captured_at"),
+            "generated_at": snapshot.get("generated_at"),
+            "origin_query": origin_query,
+            "matched_origins": sorted(matched_origins),
+            "travel_date": travel_date,
+            "return_date": None,
+            "includes_return_options": False,
+            "trip_count": len(trips),
+            "trips": trips,
+            "destinations": [{"destination": item} for item in sorted(destinations) if item],
         }
 
     def _build_snapshot(self, trips: pd.DataFrame, generated_at: datetime) -> dict:

@@ -58,6 +58,7 @@ let polylineLayer;
 let currentMapModel = null;
 let currentDirectTrips = [];
 let currentDirectPayload = null;
+let hasLoadedInitialDirectSnapshot = false;
 
 function initMap() {
   map = L.map("map", { zoomControl: true }).setView([46.6, 2.5], 6);
@@ -750,12 +751,15 @@ function renderDirectResults() {
 
   const payload = currentDirectPayload;
   const visibleTrips = currentDirectTrips;
+  const snapshotNote = payload.snapshot_only
+    ? " | snapshot rapide du dernier dataset connu"
+    : "";
   const returnSummary = payload.includes_return_options && payload.return_date
     ? ` | retours proposes a partir du ${formatFrenchDate(payload.return_date)}`
     : payload.includes_return_options
       ? " | retours proposes sur les dates disponibles"
       : " | retours non precharges sur cette vue pour garder une recherche rapide";
-  resultSummary.textContent = `${payload.destinations.length} destination(s) | ${payload.trip_count} train(s) marques a 0 EUR dans le dataset SNCF depuis ${payload.matched_origins.join(", ")}${returnSummary}`;
+  resultSummary.textContent = `${payload.destinations.length} destination(s) | ${payload.trip_count} train(s) marques a 0 EUR dans le dataset SNCF depuis ${payload.matched_origins.join(", ") || payload.origin_query}${returnSummary}${snapshotNote}`;
 
   if (!currentDirectTrips.length) {
     resultsContainer.innerHTML = emptyState("Aucun train marque a 0 EUR dans le dataset SNCF pour ce depart et cette date.");
@@ -815,6 +819,30 @@ function renderDirect(payload) {
   currentDirectTrips = payload.trips || [];
   updateResultActions();
   renderDirectResults();
+}
+
+async function loadInitialDirectSnapshot() {
+  const params = syncUrlAndNav();
+  const values = getParamsObject();
+  if (page.key !== "direct" || hasLoadedInitialDirectSnapshot || !values.origin || !values.date) {
+    return false;
+  }
+
+  resultSummary.textContent = "Chargement rapide du dernier snapshot...";
+  setLoadingState(true);
+  try {
+    const payload = await apiGet(`/api/direct/latest?${params.toString()}`);
+    if (payload?.has_snapshot) {
+      renderDirect(payload);
+      hasLoadedInitialDirectSnapshot = true;
+      return true;
+    }
+  } catch (_error) {
+    // Fall through to the normal heavy route if no snapshot is available.
+  } finally {
+    setLoadingState(false);
+  }
+  return false;
 }
 
 function renderDayTrips(payload) {
@@ -1699,7 +1727,16 @@ document.addEventListener("DOMContentLoaded", () => {
   updateResultActions();
   setDefaultInputs();
   syncUrlAndNav();
-  loadCurrentPage();
+
+  if (page.key === "direct") {
+    loadInitialDirectSnapshot().then((loadedSnapshot) => {
+      if (!loadedSnapshot) {
+        loadCurrentPage();
+      }
+    });
+  } else {
+    loadCurrentPage();
+  }
 
   if (originInput) {
     originInput.addEventListener("input", fetchSuggestions);

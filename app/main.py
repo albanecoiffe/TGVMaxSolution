@@ -250,6 +250,16 @@ def create_app(
     def watch_latest():
         return planner.latest_zero_watch()
 
+    @app.get("/api/direct/latest")
+    def direct_latest(
+        origin: str,
+        travel_date: date = Query(alias="date"),
+    ):
+        try:
+            return planner.latest_direct_snapshot(origin, travel_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/live-watch/latest")
     def live_watch_latest():
         return live_watch_store.latest()

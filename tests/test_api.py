@@ -193,6 +193,21 @@ def test_refresh_endpoint_returns_zero_watch_diff_and_latest_watch(settings):
     assert latest_payload["removed_zero_count"] == 1
 
 
+def test_direct_latest_returns_snapshot_payload(settings):
+    client = TestClient(create_app(settings))
+
+    refresh = client.post("/api/refresh")
+    assert refresh.status_code == 200
+
+    latest_direct = client.get("/api/direct/latest", params={"origin": "Paris", "date": "2026-05-23"})
+    assert latest_direct.status_code == 200
+    payload = latest_direct.json()
+    assert payload["has_snapshot"] is True
+    assert payload["snapshot_only"] is True
+    assert payload["travel_date"] == "2026-05-23"
+    assert payload["trip_count"] >= 1
+
+
 def test_live_watch_ingest_and_latest(settings):
     client = TestClient(create_app(settings))
 
