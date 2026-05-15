@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from threading import Thread
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -8,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import Settings
+from app.services.query_cache import QueryCache
 from app.services.live_watch import LiveWatchStore
 from app.services.live_watch_plan import LiveWatchPlanStore
 from app.services.live_worker import LiveWorkerStore
@@ -88,7 +90,18 @@ PAGES = {
 
 
 def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> dict:
-    meta = planner.meta()
+    if page_key == "live_watch":
+        meta = {
+            "app_name": planner.settings.app_name,
+            "hybrid_enabled": False,
+            "available_dates": [],
+            "date_min": None,
+            "date_max": None,
+            "mountain_destinations": [],
+            "generated_at": "",
+        }
+    else:
+        meta = planner.meta()
     filters = {
         "origin": request.query_params.get("origin", "Paris"),
         "date": request.query_params.get("date", meta["date_min"] or ""),
@@ -113,6 +126,7 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or Settings()
     planner = TravelPlanner(app_settings)
+    query_cache = QueryCache(app_settings.query_cache_seconds)
     live_watch_store = LiveWatchStore(app_settings)
     live_watch_plan_store = LiveWatchPlanStore(app_settings)
     live_worker_store = LiveWorkerStore(app_settings)
@@ -120,9 +134,21 @@ def create_app(
     app = FastAPI(title=app_settings.app_name)
     app.state.settings = app_settings
     app.state.planner = planner
+    app.state.query_cache = query_cache
 
     templates = Jinja2Templates(directory=str(app_settings.templates_dir))
     app.mount("/static", StaticFiles(directory=str(app_settings.static_dir)), name="static")
+
+    @app.on_event("startup")
+    def warm_bundle_in_background() -> None:
+        def _warm() -> None:
+            try:
+                planner.meta()
+            except Exception:
+                # Keep startup resilient on Render/free cold boots.
+                return
+
+        Thread(target=_warm, daemon=True).start()
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
@@ -150,6 +176,7 @@ def create_app(
 
     @app.post("/api/refresh")
     def refresh():
+        query_cache.clear()
         return planner.refresh()
 
     @app.get("/api/watch/latest")
@@ -188,7 +215,11 @@ def create_app(
 
     @app.get("/api/stations")
     def stations(q: str = Query("", min_length=1)):
-        return {"results": planner.search_stations(q)}
+        cache_key = f"stations|{q}"
+        cached = query_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        return query_cache.set(cache_key, {"results": planner.search_stations(q)})
 
     @app.get("/api/direct")
     def direct(
@@ -198,12 +229,25 @@ def create_app(
         include_returns: bool = True,
     ):
         try:
-            return planner.direct_trips(
+            cache_key = "|".join(
+                [
+                    "direct",
+                    origin,
+                    travel_date.isoformat(),
+                    return_date.isoformat() if return_date else "",
+                    str(include_returns),
+                ]
+            )
+            cached = query_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            payload = planner.direct_trips(
                 origin_query=origin,
                 travel_date=travel_date,
                 return_date=return_date,
                 include_returns=include_returns,
             )
+            return query_cache.set(cache_key, payload)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -216,13 +260,27 @@ def create_app(
         latest_return_time: str = "23:30",
     ):
         try:
-            return planner.day_trip_destinations(
+            cache_key = "|".join(
+                [
+                    "day_trips",
+                    origin,
+                    travel_date.isoformat(),
+                    return_date.isoformat() if return_date else "",
+                    str(min_stay_minutes),
+                    latest_return_time,
+                ]
+            )
+            cached = query_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            payload = planner.day_trip_destinations(
                 origin_query=origin,
                 travel_date=travel_date,
                 return_date=return_date,
                 min_stay_minutes=min_stay_minutes,
                 latest_return_time=latest_return_time,
             )
+            return query_cache.set(cache_key, payload)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -236,7 +294,21 @@ def create_app(
         max_connection_minutes: int | None = None,
     ):
         try:
-            return planner.max_itineraries(
+            cache_key = "|".join(
+                [
+                    "routes_max",
+                    origin,
+                    travel_date.isoformat(),
+                    return_date.isoformat() if return_date else "",
+                    str(max_connections),
+                    str(min_connection_minutes),
+                    str(max_connection_minutes or ""),
+                ]
+            )
+            cached = query_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            payload = planner.max_itineraries(
                 origin_query=origin,
                 travel_date=travel_date,
                 return_date=return_date,
@@ -245,6 +317,7 @@ def create_app(
                 max_connection_minutes=max_connection_minutes,
                 min_connections=1,
             )
+            return query_cache.set(cache_key, payload)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -257,13 +330,28 @@ def create_app(
         max_connection_minutes: int | None = None,
     ):
         try:
-            payload = planner.hybrid_itineraries(
+            cache_key = "|".join(
+                [
+                    "routes_hybrid",
+                    origin,
+                    travel_date.isoformat(),
+                    str(max_connections),
+                    str(min_connection_minutes),
+                    str(max_connection_minutes or ""),
+                ]
+            )
+            cached = query_cache.get(cache_key)
+            if cached is not None:
+                payload = cached
+            else:
+                payload = planner.hybrid_itineraries(
                 origin_query=origin,
                 travel_date=travel_date,
                 max_connections=max_connections,
                 min_connection_minutes=min_connection_minutes,
                 max_connection_minutes=max_connection_minutes,
             )
+                query_cache.set(cache_key, payload)
             if not payload["enabled"]:
                 return JSONResponse(payload, status_code=412)
             return payload

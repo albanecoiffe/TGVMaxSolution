@@ -325,3 +325,33 @@ def test_live_worker_heartbeat_and_latest(settings):
     assert latest_worker.status_code == 200
     latest_payload = latest_worker.json()
     assert latest_payload["worker"]["watch_count"] == 19
+
+
+def test_direct_endpoint_is_cached_until_refresh(settings, monkeypatch):
+    app = create_app(settings)
+    client = TestClient(app)
+    planner = app.state.planner
+
+    original = planner.direct_trips
+    call_count = {"value": 0}
+
+    def counted_direct_trips(*args, **kwargs):
+        call_count["value"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(planner, "direct_trips", counted_direct_trips)
+
+    params = {"origin": "Paris", "date": "2026-05-23"}
+    first = client.get("/api/direct", params=params)
+    second = client.get("/api/direct", params=params)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert call_count["value"] == 1
+
+    refresh = client.post("/api/refresh")
+    assert refresh.status_code == 200
+
+    third = client.get("/api/direct", params=params)
+    assert third.status_code == 200
+    assert call_count["value"] == 2
