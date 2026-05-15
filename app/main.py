@@ -387,6 +387,7 @@ def create_app(
                 min_connection_minutes=min_connection_minutes,
                 max_connection_minutes=max_connection_minutes,
                 min_connections=1,
+                include_returns=return_date is not None,
             )
             return query_cache.set(cache_key, payload)
         except ValueError as exc:

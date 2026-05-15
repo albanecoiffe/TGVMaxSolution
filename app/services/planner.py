@@ -216,6 +216,7 @@ class TravelPlanner:
         max_connection_minutes: int | None = None,
         min_connections: int = 0,
         max_results: int | None = None,
+        include_returns: bool = False,
     ) -> dict:
         bundle = self.repository.get_bundle()
         matched_origins = self._resolve_station_query(bundle, origin_query)
@@ -234,8 +235,8 @@ class TravelPlanner:
             self._serialize_path(
                 bundle,
                 path,
-                return_date=return_date,
-                destination_names=matched_origins,
+                return_date=return_date if include_returns else None,
+                destination_names=matched_origins if include_returns else None,
                 max_connections=max_connections,
                 min_connection_minutes=min_connection_minutes,
                 max_connection_minutes=max_connection_minutes,
@@ -272,6 +273,7 @@ class TravelPlanner:
             "matched_origins": matched_origins,
             "travel_date": travel_date.isoformat(),
             "return_date": return_date.isoformat() if return_date else None,
+            "includes_return_options": include_returns,
             "results": grouped_results,
         }
 
