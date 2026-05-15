@@ -1357,20 +1357,6 @@ function renderHybrid(payload) {
 async function renderLiveWatch(payload) {
   currentDirectTrips = [];
   updateResultActions();
-
-  if (!payload?.has_live_watch) {
-    resultSummary.textContent = payload?.message || "Aucune surveillance live disponible.";
-    resultsContainer.innerHTML = emptyState(
-      "Aucune synchronisation live n'a encore ete recue. Lance une verification depuis l'extension pour alimenter cette page."
-    );
-    renderMapModel({ points: [], legend: PAGE_LEGENDS.live_watch }, { focusSelection: false, scrollSelection: false });
-    return;
-  }
-
-  const summary = payload.summary || {};
-  const watches = payload.watches || [];
-  const activity = payload.recent_activity || [];
-  const capturedAt = payload.captured_at ? formatDateTime(payload.captured_at) : "inconnue";
   let plan = null;
   let worker = null;
   try {
@@ -1384,7 +1370,15 @@ async function renderLiveWatch(payload) {
     worker = null;
   }
 
-  resultSummary.textContent = `${summary.watch_count || 0} surveillance(s) | ${summary.zero_watch_count || 0} avec 0 € | ${summary.zero_offer_count || 0} train(s) 0 € visibles | derniere sync ${capturedAt}`;
+  const hasLiveWatch = Boolean(payload?.has_live_watch);
+  const summary = payload.summary || {};
+  const watches = payload.watches || [];
+  const activity = payload.recent_activity || [];
+  const capturedAt = payload.captured_at ? formatDateTime(payload.captured_at) : "inconnue";
+
+  resultSummary.textContent = hasLiveWatch
+    ? `${summary.watch_count || 0} surveillance(s) | ${summary.zero_watch_count || 0} avec 0 € | ${summary.zero_offer_count || 0} train(s) 0 € visibles | derniere sync ${capturedAt}`
+    : payload?.message || "Aucune surveillance live disponible.";
   const planLabel = plan?.has_plan
     ? `${plan.watch_count || plan.watches?.length || 0} surveillance(s) planifiee(s)`
     : "Aucun plan automatique actif";
@@ -1420,7 +1414,28 @@ async function renderLiveWatch(payload) {
         ${worker.worker?.last_error ? `<div>${escapeHtml(worker.worker.last_error)}</div>` : ""}
       </div>
     `
-    : `<div class="empty-state">Aucun heartbeat worker recu.</div>`;
+    : `
+      <div class="empty-state">
+        Aucun heartbeat worker recu.<br />
+        Configure l'extension sur <strong>${escapeHtml(window.location.origin)}</strong> puis lance <strong>Verifier maintenant</strong>.
+      </div>
+    `;
+
+  const syncStatusHtml = hasLiveWatch
+    ? ""
+    : `
+      <article class="live-watch-panel">
+        <h3>Etat de synchronisation</h3>
+        <div class="activity-list">
+          <div class="activity-item">
+            <strong>Aucune synchro recue</strong>
+            <div class="muted">Le site attend un premier envoi depuis l'extension navigateur.</div>
+            <div>Backend attendu: ${escapeHtml(window.location.origin)}</div>
+            <div class="muted">Ouvre l'extension, regle le backend sur cette URL, puis clique sur Verifier maintenant.</div>
+          </div>
+        </div>
+      </article>
+    `;
 
   const activityHtml = activity.length
     ? activity
@@ -1508,6 +1523,7 @@ async function renderLiveWatch(payload) {
   resultsContainer.innerHTML = `
     ${summaryHtml}
     <section class="live-watch-layout">
+      ${syncStatusHtml}
       <article class="live-watch-panel">
         <h3>Worker navigateur</h3>
         <div class="activity-list">${workerHtml}</div>
