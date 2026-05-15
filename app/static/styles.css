@@ -873,6 +873,15 @@ body {
   border: 1px solid var(--line);
 }
 
+.map-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  margin: 0;
+  border-radius: 22px;
+}
+
 .map-legend {
   display: flex;
   flex-wrap: wrap;

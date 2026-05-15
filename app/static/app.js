@@ -19,6 +19,7 @@ const resultSummary = document.getElementById("result-summary");
 const mapLegend = document.getElementById("map-legend");
 const resultActions = document.getElementById("result-actions");
 const loadingOverlay = document.getElementById("loading-overlay");
+const mapContainer = document.getElementById("map");
 
 const ROUTE_COLORS = [
   "#db5f32",
@@ -59,14 +60,72 @@ let currentMapModel = null;
 let currentDirectTrips = [];
 let currentDirectPayload = null;
 let hasLoadedInitialDirectSnapshot = false;
+let mapReady = false;
+let leafletLoadPromise = null;
+
+function showMapPlaceholder(message) {
+  if (!mapContainer) {
+    return;
+  }
+  mapContainer.innerHTML = `<div class="empty-state map-placeholder">${escapeHtml(message)}</div>`;
+}
+
+function ensureLeaflet() {
+  if (window.L) {
+    return Promise.resolve(window.L);
+  }
+  if (leafletLoadPromise) {
+    return leafletLoadPromise;
+  }
+  leafletLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    script.integrity = "sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=";
+    script.crossOrigin = "";
+    script.async = true;
+    script.onload = () => resolve(window.L);
+    script.onerror = () => reject(new Error("Carte indisponible pour le moment."));
+    document.head.appendChild(script);
+  });
+  return leafletLoadPromise;
+}
 
 function initMap() {
+  if (mapReady) {
+    return true;
+  }
+  if (!mapContainer) {
+    return false;
+  }
+  if (!window.L) {
+    showMapPlaceholder("Chargement de la carte...");
+    return false;
+  }
   map = L.map("map", { zoomControl: true }).setView([46.6, 2.5], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   polylineLayer = L.layerGroup().addTo(map);
+  mapReady = true;
+  return true;
+}
+
+async function warmMap() {
+  if (mapReady) {
+    return;
+  }
+  try {
+    await ensureLeaflet();
+    if (!initMap()) {
+      return;
+    }
+    if (currentMapModel) {
+      renderMapModel(currentMapModel, { focusSelection: false, scrollSelection: false });
+    }
+  } catch (error) {
+    showMapPlaceholder(error.message || "Carte indisponible pour le moment.");
+  }
 }
 
 function setDefaultInputs() {
@@ -268,6 +327,9 @@ function uniqueStationPoints(entries) {
 }
 
 function createMapIcon(kind = "destination", isActive = false) {
+  if (!window.L) {
+    return null;
+  }
   const safeKind = ["origin", "destination", "via", "target"].includes(kind) ? kind : "destination";
   const activeClass = isActive ? " is-active" : "";
   return L.divIcon({
@@ -320,6 +382,9 @@ function makeStraightRoute(originCoordinates, destinationCoordinates) {
 }
 
 function drawRoute(route, style, bounds) {
+  if (!window.L || !polylineLayer) {
+    return;
+  }
   if (!route || !route.segments) {
     return;
   }
@@ -389,6 +454,13 @@ function highlightResultGroup(resultKey, { scroll = true } = {}) {
 function renderMapModel(model, options = {}) {
   currentMapModel = model;
   renderMapLegend(model.legend || PAGE_LEGENDS[page.key] || []);
+  if (!mapReady || !markerLayer || !polylineLayer || !map) {
+    if (!window.L) {
+      showMapPlaceholder("Chargement de la carte...");
+      warmMap();
+    }
+    return;
+  }
   markerLayer.clearLayers();
   polylineLayer.clearLayers();
   map.invalidateSize(false);
@@ -1738,7 +1810,7 @@ async function refreshData() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  initMap();
+  warmMap();
   renderMapLegend(PAGE_LEGENDS[page.key] || []);
   updateResultActions();
   setDefaultInputs();
