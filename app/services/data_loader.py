@@ -41,28 +41,33 @@ class DataRepository:
         self._bundle: DataBundle | None = None
         self._lock = Lock()
 
-    def get_bundle(self, force_refresh: bool = False) -> DataBundle:
+    def get_bundle(self, force_refresh: bool = False, include_gtfs: bool = False) -> DataBundle:
         with self._lock:
             if force_refresh:
-                self._refresh_files(force=True)
+                self._refresh_files(force=True, include_gtfs=include_gtfs)
                 self._bundle = None
             if self._bundle is not None:
-                if not self._files_stale():
+                if not self._files_stale(include_gtfs=include_gtfs):
+                    if include_gtfs and self._bundle.rail_segments is None:
+                        self._refresh_files(force=False, include_gtfs=True)
+                        self._attach_gtfs(self._bundle)
                     return self._bundle
-                self._refresh_files(force=False)
+                self._refresh_files(force=False, include_gtfs=include_gtfs)
                 self._bundle = None
             if self._bundle is None:
-                self._refresh_files(force=False)
-                self._bundle = self._build_bundle()
+                self._refresh_files(force=False, include_gtfs=include_gtfs)
+                self._bundle = self._build_bundle(include_gtfs=include_gtfs)
             return self._bundle
 
     def refresh(self) -> DataBundle:
         return self.get_bundle(force_refresh=True)
 
-    def _build_bundle(self) -> DataBundle:
+    def _build_bundle(self, include_gtfs: bool = False) -> DataBundle:
         trips = self._load_tgvmax()
         stations = self._load_stations()
-        rail_segments, rail_stops, rail_calendar, rail_exceptions = self._load_sncf_gtfs()
+        rail_segments = rail_stops = rail_calendar = rail_exceptions = None
+        if include_gtfs:
+            rail_segments, rail_stops, rail_calendar, rail_exceptions = self._load_sncf_gtfs()
         station_names = sorted(stations.keys())
         return DataBundle(
             trips=trips,
@@ -75,13 +80,24 @@ class DataRepository:
             rail_exceptions=rail_exceptions,
         )
 
-    def _files_stale(self) -> bool:
+    def has_gtfs_cache(self) -> bool:
+        return self.settings.sncf_gtfs_cache_file.exists()
+
+    def _attach_gtfs(self, bundle: DataBundle) -> None:
+        rail_segments, rail_stops, rail_calendar, rail_exceptions = self._load_sncf_gtfs()
+        bundle.rail_segments = rail_segments
+        bundle.rail_stops = rail_stops
+        bundle.rail_calendar = rail_calendar
+        bundle.rail_exceptions = rail_exceptions
+
+    def _files_stale(self, include_gtfs: bool = False) -> bool:
         max_age = timedelta(hours=self.settings.refresh_hours)
         cache_files = [
             self.settings.tgvmax_cache_file,
             self.settings.stations_cache_file,
-            self.settings.sncf_gtfs_cache_file,
         ]
+        if include_gtfs:
+            cache_files.append(self.settings.sncf_gtfs_cache_file)
         now = datetime.now()
         for cache_file in cache_files:
             if not cache_file.exists():
@@ -91,7 +107,7 @@ class DataRepository:
                 return True
         return False
 
-    def _refresh_files(self, force: bool) -> None:
+    def _refresh_files(self, force: bool, include_gtfs: bool = False) -> None:
         self.settings.cache_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_file(
             self.settings.tgvmax_url,
@@ -103,12 +119,13 @@ class DataRepository:
             self.settings.stations_cache_file,
             force=force,
         )
-        self._ensure_file(
-            self.settings.sncf_gtfs_url,
-            self.settings.sncf_gtfs_cache_file,
-            force=force,
-            optional=True,
-        )
+        if include_gtfs:
+            self._ensure_file(
+                self.settings.sncf_gtfs_url,
+                self.settings.sncf_gtfs_cache_file,
+                force=force,
+                optional=True,
+            )
 
     def _ensure_file(self, url: str, destination: Path, force: bool, optional: bool = False) -> None:
         if destination.exists() and not force and not self._files_stale():

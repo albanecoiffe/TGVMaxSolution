@@ -52,7 +52,7 @@ class TravelPlanner:
         available_dates = sorted(trips["date"].dropna().unique().tolist())
         return {
             "app_name": self.settings.app_name,
-            "hybrid_enabled": self._hybrid_enabled(bundle),
+            "hybrid_enabled": self.repository.has_gtfs_cache() or self._hybrid_enabled(bundle),
             "available_dates": available_dates,
             "date_min": available_dates[0] if available_dates else None,
             "date_max": available_dates[-1] if available_dates else None,
@@ -361,7 +361,7 @@ class TravelPlanner:
         if cached is not None:
             return cached
 
-        bundle = self.repository.get_bundle()
+        bundle = self.repository.get_bundle(include_gtfs=True)
         if not self._hybrid_enabled(bundle):
             payload = {
                 "enabled": False,
