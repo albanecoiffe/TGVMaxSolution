@@ -45,6 +45,10 @@ class TravelPlanner:
         self._hybrid_cache: dict[tuple[str, str, int | None], dict] = {}
         self._local_rail_extensions_cache: dict[tuple[str, str, str, int | None], list[dict]] = {}
         self._ter_price_cache: dict[tuple[str, str, str], dict | None] = {}
+        self._station_resolution_cache: dict[str, StationRecord | None] = {}
+        self._station_coordinates_cache: dict[str, dict | None] = {}
+        self._commune_centroid_cache: dict[str, dict | None] = {}
+        self._sncf_search_label_cache: dict[str, str] = {}
 
     def meta(self) -> dict:
         bundle = self.repository.get_bundle()
@@ -64,6 +68,10 @@ class TravelPlanner:
         self._hybrid_cache.clear()
         self._local_rail_extensions_cache.clear()
         self._ter_price_cache.clear()
+        self._station_resolution_cache.clear()
+        self._station_coordinates_cache.clear()
+        self._commune_centroid_cache.clear()
+        self._sncf_search_label_cache.clear()
         bundle = self.repository.refresh()
         zero_watch = self.zero_watch.record_snapshot(bundle.trips, bundle.generated_at)
         return {
@@ -476,8 +484,13 @@ class TravelPlanner:
         return sorted(matches)
 
     def _resolve_station(self, bundle: DataBundle, name: str) -> StationRecord | None:
+        cache_key = normalize_text(name)
+        if cache_key in self._station_resolution_cache:
+            return self._station_resolution_cache[cache_key]
         if name in bundle.stations:
-            return bundle.stations[name]
+            station = bundle.stations[name]
+            self._station_resolution_cache[cache_key] = station
+            return station
         name_aliases = self._station_name_aliases(name)
         best_station: StationRecord | None = None
         best_score = 0
@@ -502,9 +515,9 @@ class TravelPlanner:
                 best_score = score
                 best_name_length = candidate_name_length
 
-        if best_score >= 60:
-            return best_station
-        return None
+        resolved = best_station if best_score >= 60 else None
+        self._station_resolution_cache[cache_key] = resolved
+        return resolved
 
     @staticmethod
     def _station_name_aliases(name: str) -> set[str]:
@@ -801,18 +814,27 @@ class TravelPlanner:
         return active_service_ids
 
     def _station_coordinates(self, bundle: DataBundle, name: str) -> dict | None:
+        cache_key = normalize_text(name)
+        if cache_key in self._station_coordinates_cache:
+            return self._station_coordinates_cache[cache_key]
         station = self._resolve_station(bundle, name)
         if station is None:
             fallback = self._commune_centroid(bundle, name)
             if fallback is None:
+                self._station_coordinates_cache[cache_key] = None
                 return None
+            self._station_coordinates_cache[cache_key] = fallback
             return fallback
-        return {"latitude": station.latitude, "longitude": station.longitude}
+        coordinates = {"latitude": station.latitude, "longitude": station.longitude}
+        self._station_coordinates_cache[cache_key] = coordinates
+        return coordinates
 
     def _commune_centroid(self, bundle: DataBundle, name: str) -> dict | None:
         cleaned = re.sub(r"\([^)]*\)", " ", name)
         cleaned = cleaned.replace("/", " ").replace("-", " ")
         commune_query = normalize_text(cleaned)
+        if commune_query in self._commune_centroid_cache:
+            return self._commune_centroid_cache[commune_query]
         if not commune_query:
             return None
 
@@ -829,11 +851,14 @@ class TravelPlanner:
                 or f" {commune_query} " in f" {normalize_text(station.name)} "
             ]
         if not matching_stations:
+            self._commune_centroid_cache[commune_query] = None
             return None
 
         latitude = sum(station.latitude for station in matching_stations) / len(matching_stations)
         longitude = sum(station.longitude for station in matching_stations) / len(matching_stations)
-        return {"latitude": latitude, "longitude": longitude}
+        centroid = {"latitude": latitude, "longitude": longitude}
+        self._commune_centroid_cache[commune_query] = centroid
+        return centroid
 
     def _group_destinations(self, bundle: DataBundle, trips_frame) -> list[dict]:
         grouped = []
@@ -1089,14 +1114,19 @@ class TravelPlanner:
         return f"https://www.sncf-connect.com/home/search?userInput={quote(user_input)}"
 
     def _sncf_search_label(self, bundle: DataBundle, place_name: str) -> str:
+        cache_key = normalize_text(place_name)
+        if cache_key in self._sncf_search_label_cache:
+            return self._sncf_search_label_cache[cache_key]
         station = self._resolve_station(bundle, place_name)
         candidate = station.name if station is not None else place_name
         cleaned = re.sub(r"\([^)]*\)", " ", candidate)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
         if normalize_text(cleaned).startswith("PARIS"):
+            self._sncf_search_label_cache[cache_key] = "Paris"
             return "Paris"
         if cleaned.isupper():
-            return cleaned.title()
+            cleaned = cleaned.title()
+        self._sncf_search_label_cache[cache_key] = cleaned
         return cleaned
 
     @staticmethod
