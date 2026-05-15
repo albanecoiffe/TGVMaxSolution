@@ -179,11 +179,14 @@ function getParams() {
   return params;
 }
 
-function syncUrlAndNav() {
+function syncUrlAndNav(options = {}) {
+  const { updateHistory = true } = options;
   const params = getParams();
   const queryString = params.toString();
   const nextUrl = queryString ? `${window.location.pathname}?${queryString}` : window.location.pathname;
-  window.history.replaceState({}, "", nextUrl);
+  if (updateHistory) {
+    window.history.replaceState({}, "", nextUrl);
+  }
   document.querySelectorAll(".section-link").forEach((link) => {
     const baseHref = link.dataset.baseHref;
     link.href = queryString ? `${baseHref}?${queryString}` : baseHref;
@@ -1644,6 +1647,19 @@ async function loadCurrentPage() {
   }
 }
 
+function renderInitialIdleState() {
+  if (page.key === "live_watch") {
+    return;
+  }
+
+  resultSummary.textContent = page.result_help || "Configure les parametres puis lance une recherche.";
+  resultsContainer.innerHTML = emptyState("Clique sur Explorer pour lancer la recherche.");
+  renderMapModel(
+    { points: [], legend: PAGE_LEGENDS[page.key] || [] },
+    { focusSelection: false, scrollSelection: false }
+  );
+}
+
 async function fetchSuggestions() {
   if (!originInput || !stationSuggestions) {
     return;
@@ -1726,16 +1742,12 @@ document.addEventListener("DOMContentLoaded", () => {
   renderMapLegend(PAGE_LEGENDS[page.key] || []);
   updateResultActions();
   setDefaultInputs();
-  syncUrlAndNav();
+  syncUrlAndNav({ updateHistory: false });
 
-  if (page.key === "direct") {
-    loadInitialDirectSnapshot().then((loadedSnapshot) => {
-      if (!loadedSnapshot) {
-        loadCurrentPage();
-      }
-    });
-  } else {
+  if (page.key === "live_watch") {
     loadCurrentPage();
+  } else {
+    renderInitialIdleState();
   }
 
   if (originInput) {
