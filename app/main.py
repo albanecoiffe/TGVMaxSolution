@@ -285,7 +285,10 @@ def create_app(
     @app.post("/api/live-watch/ingest")
     async def live_watch_ingest(request: Request):
         payload = await request.json()
-        zero_release = planner.zero_release.record_live_watch(payload)
+        try:
+            zero_release = planner.zero_release.record_live_watch(payload)
+        except Exception:
+            zero_release = {"recorded": 0, "total": 0, "error": "enregistrement zero_release impossible"}
         normalized = live_watch_store.ingest(payload)
         normalized["zero_release"] = zero_release
         return normalized
