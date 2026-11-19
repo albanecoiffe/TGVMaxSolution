@@ -188,3 +188,28 @@ Oui, aujourd'hui le moteur navigateur a besoin d'une machine allumée : Chrome/C
 Un VPS pas cher fonctionne aussi mais subit plus de blocages DataDome (IP datacenter). Un téléphone ne peut pas héberger l'extension (Chrome mobile sans extensions).
 
 Si la session SNCF Connect expire côté worker, une seule recherche manuelle sur SNCF Connect suffit à réamorcer les surveillances (le seed `itineraries` est recapturé automatiquement).
+
+## Option gratuite 24/7 sans aucune machine chez toi
+
+Deux couches, selon ce que tu veux :
+
+### 1. Donnees ouvertes + alertes (100% gratuit, aucune machine allumée, aucune session SNCF)
+
+`.github/workflows/daily-tgvmax-refresh.yml` tourne en cron GitHub Actions (**gratuit sur un repo public**, minutes illimitées ; sur un repo privé ça consomme les 2000 min/mo du plan gratuit) :
+
+1. `POST /api/refresh` sur le backend déployé (Render) → recharge le dataset `tgvmax` et enregistre le diff `zero_watch` ;
+2. `GET /api/watch/latest` → lit les nouveaux trains à 0 € publiés ;
+3. si `new_zero_count > 0` et que la variable de repo `ALERT_ON_NEW_ZERO=true`, ouvre une **issue GitHub** avec la liste (tu reçois la notification par mail).
+
+Configuration (Settings → Secrets and variables → Actions → Variables) :
+
+- `RENDER_BASE_URL` = `https://ton-app.onrender.com`
+- `ALERT_ON_NEW_ZERO` = `true` (optionnel)
+
+Lance aussi manuellement : `python3 tools/refresh_and_alert.py --base-url https://ton-app.onrender.com`
+
+Granularité : celle de la publication SNCF (1×/jour, début de matinée). Ce n'est **pas** du temps réel.
+
+### 2. Temps réel (nécessite un navigateur connecté quelque part)
+
+Pas d'API publique temps réel des places MAX, et le scraping de SNCF Connect contourne la connexion + DataDome : interdit par les CGU et par l'article 323-1 du Code pénal — je ne fournis pas d'outil dans ce but. Le temps réel passe donc par une vraie session navigateur (l'extension) sur une machine allumée : ton PC, ou un **Oracle Cloud Always Free** (VM ARM gratuite à vie, ~1/6 OCPU) avec le kit `tools/live_worker/` — avec le risque de blocage DataDome lié aux IP datacenter.
