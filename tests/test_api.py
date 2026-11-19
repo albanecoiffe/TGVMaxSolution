@@ -285,7 +285,16 @@ def test_live_watch_ingest_and_latest(settings):
     assert latest_payload["recent_activity"][0]["type"] == "check_ok"
 
 
-def test_live_watch_default_weekend_plan_and_clear(settings):
+def test_live_watch_default_weekend_plan_and_clear(settings, monkeypatch):
+    from datetime import date as real_date
+
+    class FakeDate(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 5, 20)
+
+    monkeypatch.setattr("app.services.live_watch_plan.date", FakeDate)
+
     client = TestClient(create_app(settings))
 
     empty_plan = client.get("/api/live-watch/plan")

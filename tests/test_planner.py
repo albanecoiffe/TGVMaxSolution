@@ -173,6 +173,7 @@ def test_max_itineraries_include_return_options(planner):
         date(2026, 5, 23),
         max_connections=2,
         min_connections=1,
+        include_returns=True,
     )
     annecy = next(item for item in payload["results"] if item["destination"] == "ANNECY")
     itinerary = annecy["itineraries"][0]

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "vibe/**"
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run test suite
+        run: PYTHONPATH=. uv run pytest -q
+
+      - name: Check JS syntax (browser extension + web UI)
+        run: |
+          for f in tools/sncf_probe_extension/*.js app/static/app.js; do
+            [ -e "$f" ] || continue
+            echo "node --check $f"
+            node --check "$f"
+          done
+
+      - name: Check worker launcher syntax
+        run: |
+          if [ -f tools/live_worker/run-live-worker.sh ]; then
+            bash -n tools/live_worker/run-live-worker.sh
+          fi
+
+      - name: Check Python tools compile
+        run: |
+          for f in tools/*.py tools/live_worker/*.py; do
+            [ -e "$f" ] || continue
+            echo "py_compile $f"
+            python3 -m py_compile "$f"
+          done
