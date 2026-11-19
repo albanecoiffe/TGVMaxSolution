@@ -7,6 +7,7 @@ from app.services.sncf_probe import (
     extract_zero_travel_ids,
     is_zero_price_label,
     redact_sensitive_data,
+    summarize_itinerary_event,
     summarize_probe_file,
 )
 
@@ -168,3 +169,36 @@ def test_extract_zero_travel_ids_deduplicates():
     ]
 
     assert extract_zero_travel_ids(offers) == ["travel-1", "travel-2"]
+
+
+def test_summarize_itinerary_event_falls_back_to_regex_on_truncated_body():
+    raw_body = (
+        '{"longDistance":{"proposals":{"bestPrices":['
+        '{"label":"Sam 16","priceLabel":"0\\u00a0\\u20ac","bestPriceDateTime":"2026-05-16T06:23:00"}'
+        '],"proposals":[{"id":"proposal-1","travelId":"travel-9",'
+        '"header":{"title":"2de classe","accessibilityTitle":"x","subtitle":"Tarif Max Jeune"},'
+        '"priceLabel":"0\\u00a0\\u20ac"}]}}}'
+    )
+    event = {
+        "url": "https://www.sncf-connect.com/bff/api/v1/itineraries",
+        "requestBodyPreview": json.dumps(
+            {
+                "schedule": {"outward": {"date": "2026-05-16T04:00:00.000Z"}},
+                "mainJourney": {
+                    "origin": {"label": "Paris Montparnasse"},
+                    "destination": {"label": "Bordeaux Saint-Jean"},
+                },
+                "passengers": [{"discountCards": [{"code": "TGV_MAX"}]}],
+            }
+        ),
+        "bodyPreview": raw_body[:-5],
+    }
+
+    summary = summarize_itinerary_event(event)
+    response = summary["response"]
+
+    assert response["zero_offer_count"] == 1
+    assert response["zero_offers"][0]["offer_title"] == "2de classe"
+    assert response["zero_days"] == [
+        {"date": "2026-05-16", "label": "Sam 16", "best_price_datetime": "2026-05-16T06:23:00"}
+    ]

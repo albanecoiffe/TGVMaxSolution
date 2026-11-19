@@ -140,6 +140,7 @@ Nouveaux endpoints backend :
 
 - `GET /api/live-watch/zero-calendar` : calendrier agrège des jours a 0 EUR par trajet, construit depuis le dernier ingest ;
 - `GET /api/live-watch/history?limit=50` : historique borne (1000 entrees) des synchronisations live (`data/history/live-watch-history.jsonl`) ;
+- `GET /api/live-watch/zero-vs-dataset` : compare chaque offre 0 EUR capturee en live avec le dataset tgvmax charge cote serveur. Chaque offre est classee `in_dataset_zero` (present a 0 EUR dans la base), `in_dataset_present_not_zero` (present mais plus a 0 EUR depuis la publication du matin) ou `not_in_dataset` (train absent de la base API, ex. place ouverte depuis la publication). Le `travelId` (format `2026-12-01T06:20_6641`) sert de cle (date + numero de train), avec repli sur (date, heure de depart, gares) ;
 - `POST /api/live-watch/plan/full-month` avec `{ "origin_label": "...", "destination_label": "...", "include_return": false, "dates": ["2026-05-23", ...] }` : plan de surveillance sur toutes les dates (les `dates` sont optionnelles ; sinon les dates du dataset tgvmax dans la fenetre J..J+31 sont utilisees).
 
 La page `/live-watch` affiche desormais un panneau "Calendrier 0 EUR (temps reel)" par trajet.
@@ -149,6 +150,8 @@ Rapport en ligne de commande depuis le dernier etat enregistre :
 ```bash
 PYTHONPATH=. python3 tools/live_zero_report.py
 PYTHONPATH=. python3 tools/live_zero_report.py --path data/history/latest-live-watch.json --json
+# avec comparaison contre la base API open data (liste les trains 0 EUR captures absents de la base) :
+PYTHONPATH=. python3 tools/live_zero_report.py --dataset data/cache/tgvmax.csv
 ```
 
 Limites et politesse : une seule session humaine, un seul onglet SNCF Connect, aucun scraping du DOM, aucun contournement des protections anti-bot (DataDome) ; cadence minimale de 30 s et au plus 3 scans par trajet et par cycle. Respecte les CGU de SNCF Connect : l'outil ne reserve rien, il ne fait que lire des disponibilites pour ton propre abonnement, et une place peut partir entre deux checks — confirme toujours sur SNCF Connect avant de voyager.

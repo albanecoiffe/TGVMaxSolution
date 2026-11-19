@@ -547,3 +547,57 @@ def test_live_watch_full_month_plan_endpoint(settings):
     assert latest_plan.status_code == 200
     assert latest_plan.json()["has_plan"] is True
     assert latest_plan.json()["watch_count"] == 2
+
+
+def test_live_watch_zero_vs_dataset_endpoint(settings):
+    client = TestClient(create_app(settings))
+
+    empty = client.get("/api/live-watch/zero-vs-dataset")
+    assert empty.status_code == 200
+    assert empty.json()["has_live_watch"] is False
+
+    payload = {
+        "source": "sncf-probe-extension",
+        "captured_at": "2026-05-15T09:00:00Z",
+        "summary": {"watch_count": 1, "zero_offer_count": 2},
+        "watches": [
+            {
+                "id": "Paris|Lyon|2026-05-23",
+                "origin_label": "Paris",
+                "destination_label": "Lyon Part Dieu",
+                "watch_date": "2026-05-23",
+                "status": "ok",
+                "zero_offer_count": 2,
+                "zero_offers": [
+                    {
+                        "travelId": "2026-05-23T06:00_6611",
+                        "departureTime": "06:00",
+                        "origin": "PARIS GARE DE LYON",
+                        "destination": "LYON PART DIEU",
+                    },
+                    {
+                        "travelId": "2026-05-23T10:15_6699",
+                        "departureTime": "10:15",
+                        "origin": "PARIS GARE DE LYON",
+                        "destination": "LYON PART DIEU",
+                    },
+                ],
+                "history": [],
+            }
+        ],
+    }
+    ingest = client.post("/api/live-watch/ingest", json=payload)
+    assert ingest.status_code == 200
+
+    response = client.get("/api/live-watch/zero-vs-dataset")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_live_watch"] is True
+    assert body["dataset"]["zero_count"] == 14
+    assert body["summary"]["live_zero_offer_count"] == 2
+    assert body["summary"]["in_dataset_zero"] == 1
+    assert body["summary"]["not_in_dataset"] == 1
+    route = body["routes"][0]
+    assert route["not_in_dataset_count"] == 1
+    assert route["not_in_dataset"][0]["travel_id"] == "2026-05-23T10:15_6699"
+    assert route["offers"][0]["matched_dataset_row"]["train_no"] == "6611"

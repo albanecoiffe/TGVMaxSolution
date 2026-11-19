@@ -77,6 +77,9 @@ class LiveWatchStore:
 
         recent_activity.sort(key=lambda item: item.get("at") or "", reverse=True)
 
+        zero_calendar = self._build_zero_calendar(normalized_watches)
+        default_zero_day_count = sum(group["zero_day_count"] for group in zero_calendar)
+
         return {
             "has_live_watch": True,
             "captured_at": payload.get("captured_at"),
@@ -88,13 +91,10 @@ class LiveWatchStore:
                 "waiting_count": summary.get("waiting_count", 0),
                 "zero_watch_count": summary.get("zero_watch_count", 0),
                 "zero_offer_count": summary.get("zero_offer_count", 0),
-                "zero_day_count": summary.get(
-                    "zero_day_count",
-                    sum(watch["zero_day_count"] for watch in normalized_watches),
-                ),
+                "zero_day_count": summary.get("zero_day_count", default_zero_day_count),
             },
             "watches": normalized_watches,
-            "zero_calendar": self._build_zero_calendar(normalized_watches),
+            "zero_calendar": zero_calendar,
             "recent_activity": recent_activity[:20],
         }
 

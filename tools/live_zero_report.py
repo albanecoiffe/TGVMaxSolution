@@ -21,6 +21,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.live_dataset_diff import (
+    STATUS_MISSING,
+    STATUS_PRESENT_NOT_ZERO,
+    STATUS_ZERO,
+    diff_live_against_dataset,
+    load_tgvmax_csv,
+)
+
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "history" / "latest-live-watch.json"
 
@@ -45,7 +53,7 @@ def parse_age(iso_value: str | None) -> str:
     return f"il y a {seconds // 3600} h {(seconds % 3600) // 60} min"
 
 
-def build_report(payload: dict) -> dict:
+def build_report(payload: dict, trips=None) -> dict:
     if not payload.get("has_live_watch"):
         return {
             "has_live_watch": False,
@@ -104,13 +112,16 @@ def build_report(payload: dict) -> dict:
         )
     route_list.sort(key=lambda item: item["route"])
 
-    return {
+    report = {
         "has_live_watch": True,
         "captured_at": payload.get("captured_at"),
         "captured_age": parse_age(payload.get("captured_at")),
         "summary": payload.get("summary") or {},
         "routes": route_list,
     }
+    if trips is not None:
+        report["dataset_diff"] = diff_live_against_dataset(payload, trips)
+    return report
 
 
 def render_text(report: dict) -> str:
@@ -140,12 +151,37 @@ def render_text(report: dict) -> str:
             if date_entry.get("last_error"):
                 lines.append(f"      erreur: {date_entry['last_error']}")
         lines.append("")
+
+    diff = report.get("dataset_diff")
+    if diff and diff.get("has_live_watch"):
+        summary = diff["summary"]
+        lines += [
+            "== Comparaison avec la base API open data (dataset tgvmax)",
+            f"   dataset : {diff['dataset']['row_count']} trains, {diff['dataset']['zero_count']} à 0 EUR",
+            f"   offres live 0 EUR : {summary['live_zero_offer_count']} | "
+            f"dans la base à 0 EUR : {summary[STATUS_ZERO]} | "
+            f"dans la base mais plus à 0 EUR : {summary[STATUS_PRESENT_NOT_ZERO]} | "
+            f"ABSENTES de la base : {summary[STATUS_MISSING]}",
+            "",
+        ]
+        for route in diff.get("routes") or []:
+            if not route["not_in_dataset_count"]:
+                continue
+            lines.append(f"== {route['route']} le {route['watch_date']} : {route['not_in_dataset_count']} train(s) 0 EUR hors base API")
+            for item in route["not_in_dataset"]:
+                lines.append(
+                    f"   {item['departure_time'] or '?'} -> {item['arrival_time'] or '?'} "
+                    f"{item['origin']} -> {item['destination']} "
+                    f"(travelId={item['travel_id']}, tarifs={', '.join(item['fare_names']) or '-'})"
+                )
+            lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rapport temps reel des disponibilites 0 EUR (live-watch).")
     parser.add_argument("--path", type=Path, default=DEFAULT_PATH, help="chemin du latest-live-watch.json")
+    parser.add_argument("--dataset", type=Path, default=None, help="CSV tgvmax (API open data) pour comparer les captures live")
     parser.add_argument("--json", action="store_true", help="sortie JSON brute")
     args = parser.parse_args()
 
@@ -155,7 +191,8 @@ def main() -> int:
         return 1
 
     payload = json.loads(args.path.read_text(encoding="utf-8"))
-    report = build_report(payload)
+    trips = load_tgvmax_csv(args.dataset) if args.dataset else None
+    report = build_report(payload, trips=trips)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

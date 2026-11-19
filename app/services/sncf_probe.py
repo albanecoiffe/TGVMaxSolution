@@ -25,7 +25,9 @@ BEST_PRICE_RE = re.compile(
     r'"label":"(?P<label>[^"]+)","priceLabel":"(?P<price>[^"]+)","bestPriceDateTime":"(?P<dt>[^"]+)"'
 )
 FARE_NAME_RE = re.compile(r'"fareName":"(?P<fare>[^"]+)"')
-ZERO_PRICE_RE = re.compile(r'"priceLabel":"0\\u00a0€"|"priceLabel":"0 €"')
+ZERO_PRICE_RE = re.compile(
+    r'"priceLabel":"0(?:\\u00a0|\u00a0)(?:\\u20ac|\u20ac)"'
+)
 OFFER_TITLE_RE = re.compile(r'"header":\{"title":"(?P<title>[^"]+)","accessibilityTitle":"[^"]+","subtitle":"(?P<subtitle>[^"]+)"')
 
 

@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import Settings
 from app.services.query_cache import QueryCache
+from app.services.live_dataset_diff import diff_live_against_dataset
 from app.services.live_watch import LiveWatchStore
 from app.services.live_watch_plan import LiveWatchPlanStore
 from app.services.live_worker import LiveWorkerStore
@@ -292,6 +293,12 @@ def create_app(
     @app.get("/api/live-watch/history")
     def live_watch_history(limit: int = Query(50, ge=1, le=500)):
         return live_watch_store.history(limit)
+
+    @app.get("/api/live-watch/zero-vs-dataset")
+    def live_watch_zero_vs_dataset():
+        latest = live_watch_store.latest()
+        bundle = planner.repository.get_bundle()
+        return diff_live_against_dataset(latest, bundle.trips)
 
     @app.post("/api/live-watch/plan/full-month")
     async def live_watch_plan_full_month(request: Request):
