@@ -6,7 +6,8 @@ Application web Python pour explorer les trajets `TGV MAX` a 0 EUR avec :
 - une carte des destinations accessibles,
 - des suggestions d'aller-retour dans la journee,
 - des itineraires avec correspondances `MAX`,
-- un mode hybride `MAX + TER` qui liste automatiquement les prolongements ferroviaires depuis les gares atteignables en MAX.
+- un mode hybride `MAX + TER` qui liste automatiquement les prolongements ferroviaires depuis les gares atteignables en MAX,
+- une page « Estimation train 0 » (`/estimation-train-0`) qui agrège l'historique des sorties de billets a 0 EUR (surveillance live navigateur + snapshots du dataset SNCF) pour estimer, par date et planche horaire, le jour et l'heure les plus probables de sortie d'un train a 0 EUR.
 
 ## Sources de donnees
 

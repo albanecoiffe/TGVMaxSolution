@@ -155,6 +155,7 @@ class ZeroWatch:
             "new_zero_count": len(new_keys),
             "removed_zero_count": len(removed_keys),
             "unchanged_zero_count": len(unchanged_keys),
+            "new_trips": [current_entries[key] for key in new_keys],
             "sample_new_trips": [current_entries[key] for key in new_keys[:10]],
             "sample_removed_trips": [previous_entries[key] for key in removed_keys[:10]],
         }

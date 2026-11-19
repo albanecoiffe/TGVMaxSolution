@@ -50,10 +50,31 @@
             </label>
             {% endif %}
 
+            {% if "destination" in page.fields %}
+            <label>
+              <span>Destination (optionnelle)</span>
+              <input id="destination-input" name="destination" type="text" placeholder="Bordeaux, Lyon Part Dieu..." autocomplete="off" value="{{ filters.destination }}" />
+            </label>
+            {% endif %}
+
             {% if "date" in page.fields %}
             <label>
               <span>Date</span>
               <input id="date-input" name="date" type="date" min="{{ meta.date_min }}" max="{{ meta.date_max }}" />
+            </label>
+            {% endif %}
+
+            {% if "slot_start" in page.fields %}
+            <label>
+              <span>Planche horaire - debut</span>
+              <input id="slot-start-input" name="slot_start" type="time" value="{{ filters.slot_start }}" />
+            </label>
+            {% endif %}
+
+            {% if "slot_end" in page.fields %}
+            <label>
+              <span>Planche horaire - fin</span>
+              <input id="slot-end-input" name="slot_end" type="time" value="{{ filters.slot_end }}" />
             </label>
             {% endif %}
 

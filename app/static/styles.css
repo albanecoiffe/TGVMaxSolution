@@ -284,6 +284,57 @@ body {
   font-weight: 700;
 }
 
+.live-stat-small {
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.release-bars {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.release-bar-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) 1fr auto;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.release-bar-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.release-bar-track {
+  display: block;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.release-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0f7a73, #2f5bd3);
+}
+
+.release-bar-value {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.release-bar-value small {
+  color: var(--muted);
+}
+
+.release-most-probable .live-stat-value {
+  color: #0f7a73;
+}
+
 .live-watch-layout {
   display: grid;
   gap: 1rem;

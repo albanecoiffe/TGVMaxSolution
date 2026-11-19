@@ -75,6 +75,17 @@ PAGES = {
             "max_connections",
         ],
     },
+    "zero_estimate": {
+        "key": "zero_estimate",
+        "path": "/estimation-train-0",
+        "label": "Estimation train 0",
+        "hero_title": "Estimer quand les billets a 0 EUR vont sortir pour un jour et une planche horaire.",
+        "hero_text": "Cette page s'appuie sur l'historique des sorties 0 EUR enregistrees par la surveillance live et les snapshots du dataset SNCF : pour une date et une planche horaire, elle affiche la repartition des moments de sortie (jour et heure) et les derniers trains observes.",
+        "map_help": "La carte n'est pas utilisee pour l'estimation. Utilise le panneau principal pour lire les pourcentages de sortie et l'historique des trains a 0 EUR.",
+        "result_title": "Estimation de sortie des trains a 0 EUR",
+        "result_help": "Choisis une date et une planche horaire pour voir quand les trains a 0 EUR de ce creneau sont historiquement sortis.",
+        "fields": ["origin", "destination", "date", "slot_start", "slot_end"],
+    },
     "live_watch": {
         "key": "live_watch",
         "path": "/live-watch",
@@ -171,6 +182,9 @@ def _page_context(request: Request, planner: TravelPlanner, page_key: str) -> di
         "max_connection_minutes": request.query_params.get("max_connection_minutes", ""),
         "max_connections": request.query_params.get("max_connections", "2"),
         "latest_return_time": request.query_params.get("latest_return_time", "23:30"),
+        "destination": request.query_params.get("destination", ""),
+        "slot_start": request.query_params.get("slot_start", "18:00"),
+        "slot_end": request.query_params.get("slot_end", "21:00"),
     }
     return {
         "meta": meta,
@@ -231,6 +245,10 @@ def create_app(
     def page_live_watch(request: Request):
         return templates.TemplateResponse(request, "index.html", _page_context(request, planner, "live_watch"))
 
+    @app.get("/estimation-train-0", response_class=HTMLResponse)
+    def page_zero_estimate(request: Request):
+        return templates.TemplateResponse(request, "index.html", _page_context(request, planner, "zero_estimate"))
+
     @app.get("/api/meta")
     def meta():
         return planner.meta()
@@ -267,7 +285,10 @@ def create_app(
     @app.post("/api/live-watch/ingest")
     async def live_watch_ingest(request: Request):
         payload = await request.json()
-        return live_watch_store.ingest(payload)
+        zero_release = planner.zero_release.record_live_watch(payload)
+        normalized = live_watch_store.ingest(payload)
+        normalized["zero_release"] = zero_release
+        return normalized
 
     @app.get("/api/live-watch/plan")
     def live_watch_plan():
@@ -280,6 +301,28 @@ def create_app(
     @app.post("/api/live-watch/plan/clear")
     def live_watch_plan_clear():
         return live_watch_plan_store.clear()
+
+    @app.get("/api/zero-release/estimate")
+    def zero_release_estimate(
+        travel_date: date = Query(alias="date"),
+        slot_start: str = "00:00",
+        slot_end: str = "23:59",
+        origin: str = "",
+        destination: str = "",
+        weekday_only: bool = True,
+    ):
+        return planner.zero_release.estimate(
+            travel_date=travel_date,
+            slot_start=slot_start,
+            slot_end=slot_end,
+            origin=origin,
+            destination=destination,
+            weekday_only=weekday_only,
+        )
+
+    @app.get("/api/zero-release/events")
+    def zero_release_events(limit: int = 200):
+        return {"events": planner.zero_release.events(limit=limit)}
 
     @app.get("/api/live-worker/latest")
     def live_worker_latest():

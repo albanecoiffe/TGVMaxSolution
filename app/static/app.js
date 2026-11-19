@@ -10,6 +10,9 @@ const minConnectionInput = document.getElementById("min-connection-input");
 const maxConnectionInput = document.getElementById("max-connection-input");
 const maxConnectionsInput = document.getElementById("max-connections-input");
 const latestReturnInput = document.getElementById("latest-return-input");
+const destinationInput = document.getElementById("destination-input");
+const slotStartInput = document.getElementById("slot-start-input");
+const slotEndInput = document.getElementById("slot-end-input");
 const searchForm = document.getElementById("search-form");
 const exploreButton = document.getElementById("explore-button");
 const refreshButton = document.getElementById("refresh-button");
@@ -51,6 +54,7 @@ const PAGE_LEGENDS = {
     { kind: "target", label: "Destination finale" },
   ],
   live_watch: [],
+  zero_estimate: [],
 };
 
 let map;
@@ -153,6 +157,15 @@ function setDefaultInputs() {
   if (latestReturnInput) {
     latestReturnInput.value = initialFilters.latest_return_time || "23:30";
   }
+  if (destinationInput) {
+    destinationInput.value = initialFilters.destination || "";
+  }
+  if (slotStartInput) {
+    slotStartInput.value = initialFilters.slot_start || "18:00";
+  }
+  if (slotEndInput) {
+    slotEndInput.value = initialFilters.slot_end || "21:00";
+  }
 }
 
 function extractErrorMessageFromText(text, status) {
@@ -224,6 +237,9 @@ function getParamsObject() {
     max_connections: maxConnectionsInput?.value?.trim() || "",
     min_connection_minutes: minConnectionInput?.value?.trim() || "",
     max_connection_minutes: maxConnectionInput?.value?.trim() || "",
+    destination: destinationInput?.value?.trim() || "",
+    slot_start: slotStartInput?.value?.trim() || "",
+    slot_end: slotEndInput?.value?.trim() || "",
   };
 }
 
@@ -561,6 +577,16 @@ function updateResultActions() {
       <div class="result-actions-stack">
         <span class="live-status-note">Cette page lit l'etat persistant pousse par l'extension navigateur vers l'application locale.</span>
         <span class="live-status-note">Elle se recharge automatiquement toutes les 30 secondes.</span>
+      </div>
+    `;
+    return;
+  }
+
+  if (page.key === "zero_estimate") {
+    resultActions.innerHTML = `
+      <div class="result-actions-stack">
+        <span class="live-status-note">Les statistiques viennent de l'historique des sorties 0 EUR enregistrees par la surveillance live et les snapshots du dataset SNCF.</span>
+        <span class="live-status-note">Plus l'historique est long, plus les pourcentages sont fiables.</span>
       </div>
     `;
     return;
@@ -1662,6 +1688,111 @@ function formatDateTime(value) {
   }).format(parsed);
 }
 
+function renderReleaseBars(items, options = {}) {
+  const maxPercent = Math.max(...items.map((item) => item.percent || 0), 1);
+  const maxCount = Math.max(...items.map((item) => item.count || 0), 1);
+  return items
+    .slice(0, options.limit || 8)
+    .map((item) => {
+      const width = Math.max((item.percent || 0) / maxPercent, 0.04) * 100;
+      return `
+        <div class="release-bar-row">
+          <span class="release-bar-label">${escapeHtml(item.label)}</span>
+          <span class="release-bar-track">
+            <span class="release-bar-fill" style="width:${width.toFixed(1)}%"></span>
+          </span>
+          <span class="release-bar-value">${item.percent}% <small>(${item.count})</small></span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderZeroEstimate(payload) {
+  updateResultActions();
+  const emptyMap = () => renderMapModel({ points: [], legend: PAGE_LEGENDS.zero_estimate }, { focusSelection: false, scrollSelection: false });
+
+  if (!payload?.has_data) {
+    resultSummary.textContent = payload?.message || "Aucune donnee d'estimation disponible.";
+    resultsContainer.innerHTML = emptyState(payload?.message || "Aucune donnee d'estimation disponible.");
+    emptyMap();
+    return;
+  }
+
+  const availability = payload.availability || {};
+  const availabilityLabel = availability.rate_percent === null || availability.rate_percent === undefined
+    ? "n/a"
+    : `${availability.rate_percent}%`;
+  const mostProbable = payload.most_probable_release;
+  const sourceCounts = Object.entries(payload.source_counts || {})
+    .map(([source, count]) => `${source}: ${count}`)
+    .join(" | ");
+
+  resultSummary.textContent = `${payload.sample_size} sortie(s) 0 EUR observee(s) pour un ${escapeHtml(payload.travel_weekday_label)} entre ${payload.slot.start} et ${payload.slot.end}${payload.filters.origin ? ` depuis ${payload.filters.origin}` : ""}${payload.filters.destination ? ` vers ${payload.filters.destination}` : ""}.`;
+
+  const weekdayHourHtml = (payload.distribution_by_weekday_hour || []).length
+    ? `<article class="live-watch-panel"><h3>Jour et heure de sortie</h3><div class="release-bars">${renderReleaseBars(payload.distribution_by_weekday_hour, { limit: 8 })}</div></article>`
+    : "";
+  const delayHtml = (payload.distribution_by_delay || []).length
+    ? `<article class="live-watch-panel"><h3>Delai avant le depart (J-x)</h3><div class="release-bars">${renderReleaseBars(payload.distribution_by_delay, { limit: 8 })}</div></article>`
+    : "";
+  const hourHtml = (payload.distribution_by_hour || []).length
+    ? `<article class="live-watch-panel"><h3>Heure de sortie</h3><div class="release-bars">${renderReleaseBars(payload.distribution_by_hour, { limit: 8 })}</div></article>`
+    : "";
+
+  const mostProbableHtml = mostProbable
+    ? `
+      <article class="live-watch-panel release-most-probable">
+        <h3>Sortie la plus probable</h3>
+        <div class="live-stat-value">${escapeHtml(mostProbable.label)} - ${mostProbable.percent}%</div>
+        <p class="muted">Pour le ${escapeHtml(formatFrenchDate(payload.travel_date))}, le 0 EUR devrait sortir vers le ${escapeHtml(formatDateTime(mostProbable.expected_release_at))} (${mostProbable.count} observation(s) sur ${payload.sample_size}).</p>
+      </article>
+    `
+    : "";
+
+  const warningHtml = payload.warning ? `<div class="inline-help inline-help-warning">${escapeHtml(payload.warning)}</div>` : "";
+
+  const eventsHtml = (payload.recent_events || []).length
+    ? (payload.recent_events || [])
+        .map((event) => {
+          const route = [event.origin, event.destination].filter(Boolean).join(" -> ");
+          const releaseLabel = event.release_weekday_label
+            ? `${event.release_weekday_label} ${event.release_hour}h`
+            : "heure inconnue";
+          return `
+            <div class="activity-item">
+              <strong>${escapeHtml(event.departure_time || "?")} - ${escapeHtml(route || "Trajet")}</strong>
+              <div class="muted">voyage le ${escapeHtml(formatFrenchDate(event.travel_date))} | sorti le ${escapeHtml(formatDateTime(event.first_seen_at))} (${escapeHtml(releaseLabel)}${event.days_before !== null && event.days_before !== undefined ? `, J-${event.days_before}` : ""})</div>
+              <div class="muted">source ${escapeHtml(event.source || "")}${event.train_no ? ` | train ${escapeHtml(event.train_no)}` : ""}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="empty-state">Aucun evenement recent.</div>`;
+
+  resultsContainer.innerHTML = `
+    ${warningHtml}
+    <section class="live-summary-grid">
+      <div class="live-stat"><div class="live-stat-label">Echantillon</div><div class="live-stat-value">${payload.sample_size}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Jours observes avec 0 EUR</div><div class="live-stat-value">${availabilityLabel}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Dates observees</div><div class="live-stat-value">${availability.observed_dates || 0}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Sources</div><div class="live-stat-value live-stat-small">${escapeHtml(sourceCounts || "n/a")}</div></div>
+    </section>
+    <section class="live-watch-layout">
+      ${mostProbableHtml}
+      ${weekdayHourHtml}
+      ${delayHtml}
+      ${hourHtml}
+      <article class="live-watch-panel">
+        <h3>Sorties 0 EUR recentes (meme jour de semaine, meme planche)</h3>
+        <div class="activity-list">${eventsHtml}</div>
+      </article>
+    </section>
+  `;
+
+  emptyMap();
+}
+
 async function loadCurrentPage() {
   const params = syncUrlAndNav();
   const values = getParamsObject();
@@ -1676,6 +1807,28 @@ async function loadCurrentPage() {
       resultSummary.textContent = error.message;
       resultsContainer.innerHTML = emptyState(error.message);
       renderMapModel({ points: [], legend: PAGE_LEGENDS.live_watch }, { focusSelection: false, scrollSelection: false });
+    } finally {
+      setLoadingState(false);
+    }
+    return;
+  }
+
+  if (page.key === "zero_estimate") {
+    if (!values.date) {
+      resultSummary.textContent = "Renseigne une date pour lancer l'estimation.";
+      resultsContainer.innerHTML = emptyState("Choisis une date et une planche horaire, puis lance l'estimation.");
+      renderMapModel({ points: [], legend: PAGE_LEGENDS.zero_estimate }, { focusSelection: false, scrollSelection: false });
+      return;
+    }
+    resultSummary.textContent = "Chargement...";
+    setLoadingState(true);
+    try {
+      const payload = await apiGet(`/api/zero-release/estimate?${params.toString()}`);
+      renderZeroEstimate(payload);
+    } catch (error) {
+      resultSummary.textContent = error.message;
+      resultsContainer.innerHTML = emptyState(error.message);
+      renderMapModel({ points: [], legend: PAGE_LEGENDS.zero_estimate }, { focusSelection: false, scrollSelection: false });
     } finally {
       setLoadingState(false);
     }
