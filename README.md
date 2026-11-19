@@ -1,5 +1,7 @@
 # Max Explorer
 
+[![CI](https://github.com/albanecoiffe/TGVMaxSolution/actions/workflows/ci.yml/badge.svg)](https://github.com/albanecoiffe/TGVMaxSolution/actions/workflows/ci.yml)
+
 Application web Python pour explorer les trajets `TGV MAX` a 0 EUR avec :
 
 - les trains disponibles par jour depuis une gare ou une ville,
@@ -75,6 +77,26 @@ Sinon, l'interface affiche un lien direct vers la recherche SNCF Connect du prol
 ```bash
 uv run pytest
 ```
+
+## Tester et voir la surveillance live sans l'extension
+
+```bash
+make install
+make backend          # http://127.0.0.1:8000
+# dans un autre terminal : injecte un etat live de demo
+python3 tools/demo_live_ingest.py            # ou --dry-run pour voir le payload
+```
+
+Puis ouvre :
+
+- [http://127.0.0.1:8000/live-watch](http://127.0.0.1:8000/live-watch) : calendrier 0 EUR, surveillances, activite, worker
+- `GET /api/live-watch/latest`, `/api/live-watch/zero-calendar`, `/api/live-watch/zero-vs-dataset`, `/api/live-watch/history`, `/api/live-worker/latest`
+- `python3 tools/live_zero_report.py --dataset data/cache/tgvmax.csv` : rapport CLI + trains 0 EUR hors base API
+- `python3 tools/live_worker/check_live_worker.py` : watchdog (codes 0/1/2)
+
+Avec la vraie extension : charge `tools/sncf_probe_extension` dans `chrome://extensions`, connecte-toi sur SNCF Connect, fais une recherche, puis bouton `Surveiller` du popup — l'etat remonte toutes les minutes sur `/live-watch`.
+
+CI : `.github/workflows/ci.yml` (pytest + `node --check` sur l'extension et l'UI + `bash -n` sur le lanceur worker + `py_compile` des outils) se declenche sur chaque push/PR.
 
 ## POC session navigateur reelle
 
