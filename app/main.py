@@ -273,6 +273,48 @@ def create_app(
     def live_watch_plan():
         return live_watch_plan_store.latest()
 
+    @app.get("/api/live-watch/zero-calendar")
+    def live_watch_zero_calendar():
+        latest = live_watch_store.latest()
+        if not latest.get("has_live_watch"):
+            return {
+                "has_live_watch": False,
+                "message": latest.get("message"),
+                "captured_at": None,
+                "zero_calendar": [],
+            }
+        return {
+            "has_live_watch": True,
+            "captured_at": latest.get("captured_at"),
+            "zero_calendar": latest.get("zero_calendar", []),
+        }
+
+    @app.get("/api/live-watch/history")
+    def live_watch_history(limit: int = Query(50, ge=1, le=500)):
+        return live_watch_store.history(limit)
+
+    @app.post("/api/live-watch/plan/full-month")
+    async def live_watch_plan_full_month(request: Request):
+        body = await request.json()
+        origin_label = str(body.get("origin_label") or "").strip()
+        destination_label = str(body.get("destination_label") or "").strip()
+        if not origin_label or not destination_label:
+            raise HTTPException(
+                status_code=422,
+                detail="origin_label et destination_label sont obligatoires",
+            )
+        include_return = bool(body.get("include_return", False))
+        dates = body.get("dates")
+        if dates is not None and not isinstance(dates, list):
+            raise HTTPException(status_code=422, detail="dates doit etre une liste de dates ISO")
+        return live_watch_plan_store.build_full_month_plan(
+            origin_label,
+            destination_label,
+            planner.meta()["available_dates"],
+            include_return=include_return,
+            dates=[str(value) for value in dates] if dates else None,
+        )
+
     @app.post("/api/live-watch/plan/default-weekend-bordeaux-paris")
     def live_watch_plan_default_weekend_bordeaux_paris():
         return live_watch_plan_store.build_default_weekend_plan(planner.meta()["available_dates"])

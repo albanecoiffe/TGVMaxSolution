@@ -119,3 +119,36 @@ Sans `--execute`, le script affiche le template reconstruit. Avec `--execute`, i
 - `GET /api/watch/latest` renvoie le dernier diff enregistre.
 
 Les snapshots sont stockes dans `data/history/`. Cela permet de detecter tout de suite la mise a jour du matin cote SNCF, meme si la publication source n'est pas continue toute la journee.
+
+## Disponibilites MAX en temps reel (hors API open data)
+
+Constat : SNCF publie le dataset `tgvmax` une fois par jour en debut de matinee et indique que les disponibilites reelles se lisent sur les canaux de vente (SNCF Connect). Il n'existe pas de flux open data temps reel des places MAX ; le GTFS-RT (mis a jour toutes les 2 minutes) decrit la circulation des trains, pas les sieges MAX.
+
+Le seul signal temps reel exploitable est donc l'appel `POST https://www.sncf-connect.com/bff/api/v1/itineraries` de SNCF Connect, rejoue depuis une vraie session navigateur authentifiee par l'extension `tools/sncf_probe_extension`. Une seule reponse contient :
+
+- `longDistance.proposals.bestPrices` : le meilleur prix par jour sur ~30 jours, donc le calendrier des jours a `0 EUR` pour ce trajet, rafraichi a chaque appel ;
+- `longDistance.proposals.proposals` : les offres par train avec `priceLabel` a `0 EUR` pour la date demandee.
+
+Comportement de la surveillance live :
+
+- cycle de base toutes les 1 minute ;
+- fenetre "burst" de 06:00 a 12:00 (heure locale) : toutes les 30 s pour capter les ouvertures du matin (constantes `BURST_START_HOUR`, `BURST_END_HOUR`, `BURST_INTERVAL_MINUTES` dans `background.js`) ;
+- les surveillances sont regroupees par trajet (origine -> destination) : au moins 1 appel par trajet et par cycle rafraichit le calendrier de jours a 0 EUR, et jusqu'a `MAX_SCAN_SLOTS_PER_OD` (3) dates sont scannees en detail par cycle, en priorisant les dates deja signalees a 0 EUR et les moins recemment verifiees ;
+- alertes navigateur : `zero_added` (nouveaux trains 0 EUR), `zero_day_added` (nouveau jour 0 EUR), `zero_removed`, `zero_day_removed`.
+
+Nouveaux endpoints backend :
+
+- `GET /api/live-watch/zero-calendar` : calendrier agrège des jours a 0 EUR par trajet, construit depuis le dernier ingest ;
+- `GET /api/live-watch/history?limit=50` : historique borne (1000 entrees) des synchronisations live (`data/history/live-watch-history.jsonl`) ;
+- `POST /api/live-watch/plan/full-month` avec `{ "origin_label": "...", "destination_label": "...", "include_return": false, "dates": ["2026-05-23", ...] }` : plan de surveillance sur toutes les dates (les `dates` sont optionnelles ; sinon les dates du dataset tgvmax dans la fenetre J..J+31 sont utilisees).
+
+La page `/live-watch` affiche desormais un panneau "Calendrier 0 EUR (temps reel)" par trajet.
+
+Rapport en ligne de commande depuis le dernier etat enregistre :
+
+```bash
+PYTHONPATH=. python3 tools/live_zero_report.py
+PYTHONPATH=. python3 tools/live_zero_report.py --path data/history/latest-live-watch.json --json
+```
+
+Limites et politesse : une seule session humaine, un seul onglet SNCF Connect, aucun scraping du DOM, aucun contournement des protections anti-bot (DataDome) ; cadence minimale de 30 s et au plus 3 scans par trajet et par cycle. Respecte les CGU de SNCF Connect : l'outil ne reserve rien, il ne fait que lire des disponibilites pour ton propre abonnement, et une place peut partir entre deux checks — confirme toujours sur SNCF Connect avant de voyager.

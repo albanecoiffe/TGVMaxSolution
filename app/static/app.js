@@ -1374,6 +1374,7 @@ async function renderLiveWatch(payload) {
   const summary = payload.summary || {};
   const watches = payload.watches || [];
   const activity = payload.recent_activity || [];
+  const zeroCalendar = payload.zero_calendar || [];
   const capturedAt = payload.captured_at ? formatDateTime(payload.captured_at) : "inconnue";
 
   resultSummary.textContent = hasLiveWatch
@@ -1401,6 +1402,7 @@ async function renderLiveWatch(payload) {
       <div class="live-stat"><div class="live-stat-label">Checks OK</div><div class="live-stat-value">${summary.ok_count || 0}</div></div>
       <div class="live-stat"><div class="live-stat-label">Watches avec 0 €</div><div class="live-stat-value">${summary.zero_watch_count || 0}</div></div>
       <div class="live-stat"><div class="live-stat-label">Trains 0 € visibles</div><div class="live-stat-value">${summary.zero_offer_count || 0}</div></div>
+      <div class="live-stat"><div class="live-stat-label">Jours 0 € détectés</div><div class="live-stat-value">${summary.zero_day_count || 0}</div></div>
     </section>
   `;
 
@@ -1462,6 +1464,7 @@ async function renderLiveWatch(payload) {
               <p class="muted">${escapeHtml(formatWatchDate(watch.watch_date))} | statut ${escapeHtml(watch.status || "pending")} | checks ${watch.check_count || 0} | succes ${watch.success_count || 0}</p>
               <div class="watch-badges">
                 <span class="watch-badge${watch.zero_offer_count ? " is-alert" : ""}">${watch.zero_offer_count || 0} train(s) a 0 €</span>
+                <span class="watch-badge${watch.zero_day_count ? " is-alert" : ""}">${watch.zero_day_count || 0} jour(s) a 0 €</span>
                 <span class="watch-badge">Dernier succes ${escapeHtml(formatDateTime(watch.last_success_at))}</span>
                 ${
                   watch.last_error
@@ -1472,6 +1475,13 @@ async function renderLiveWatch(payload) {
               ${
                 departureList
                   ? `<div class="watch-history"><span class="history-chip">Departs 0 €: ${escapeHtml(departureList)}</span></div>`
+                  : ""
+              }
+              ${
+                (watch.zero_days || []).length
+                  ? `<div class="watch-history">${(watch.zero_days || [])
+                      .map((day) => `<span class="history-chip">${escapeHtml(day.label || day.date)}</span>`)
+                      .join("")}</div>`
                   : ""
               }
               ${
@@ -1520,6 +1530,26 @@ async function renderLiveWatch(payload) {
         .join("")
     : `<div class="empty-state">Aucun plan automatique configure.</div>`;
 
+  const calendarHtml = zeroCalendar.length
+    ? `<div class="plan-group-list">${zeroCalendar
+        .map(
+          (group) => `
+            <article class="plan-group">
+              <h4>${escapeHtml(group.route)}</h4>
+              <div class="muted">${group.zero_day_count || 0} jour(s) à 0 € | dernier check ${escapeHtml(formatDateTime(group.last_checked_at))}</div>
+              <div class="plan-group-dates">
+                ${(group.zero_days || [])
+                  .map(
+                    (day) => `<span class="plan-date-chip is-synced">${escapeHtml(day.label || day.date)}</span>`
+                  )
+                  .join("")}
+              </div>
+            </article>
+          `
+        )
+        .join("")}</div>`
+    : `<div class="empty-state">Aucun jour à 0 € détecté pour le moment.</div>`;
+
   resultsContainer.innerHTML = `
     ${summaryHtml}
     <section class="live-watch-layout">
@@ -1535,6 +1565,10 @@ async function renderLiveWatch(payload) {
       <article class="live-watch-panel">
         <h3>Activite recente</h3>
         <div class="activity-list">${activityHtml}</div>
+      </article>
+      <article class="live-watch-panel">
+        <h3>Calendrier 0 € (temps réel)</h3>
+        ${calendarHtml}
       </article>
       <article class="live-watch-panel">
         <h3>Surveillances</h3>
@@ -1573,6 +1607,10 @@ function historyLabel(entry) {
       return `Nouveau 0 €: ${entry.count || 0} train(s)`;
     case "zero_removed":
       return `0 € retire: ${entry.count || 0} train(s)`;
+    case "zero_day_added":
+      return `Nouveau jour à 0 €: ${entry.count || 0} jour(s)`;
+    case "zero_day_removed":
+      return `Jour 0 € retiré: ${entry.count || 0} jour(s)`;
     case "check_error":
       return `Erreur: ${entry.error || "Replay impossible"}`;
     case "check_ok":
