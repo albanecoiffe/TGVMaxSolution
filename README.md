@@ -155,3 +155,14 @@ PYTHONPATH=. python3 tools/live_zero_report.py --dataset data/cache/tgvmax.csv
 ```
 
 Limites et politesse : une seule session humaine, un seul onglet SNCF Connect, aucun scraping du DOM, aucun contournement des protections anti-bot (DataDome) ; cadence minimale de 30 s et au plus 3 scans par trajet et par cycle. Respecte les CGU de SNCF Connect : l'outil ne reserve rien, il ne fait que lire des disponibilites pour ton propre abonnement, et une place peut partir entre deux checks — confirme toujours sur SNCF Connect avant de voyager.
+
+## Worker live 24/7 (sans laisser ton PC allumé)
+
+Oui, aujourd'hui le moteur navigateur a besoin d'une machine allumée : Chrome/Chromium ouvert avec l'extension, un onglet `sncf-connect.com` connecté, la machine non en veille. Mais ce n'est pas forcément ton PC portable :
+
+- le **backend tourne 24/7 sur Render** (`render.yaml`) : pages, historique, calendriers et alertes consultables depuis n'importe quel appareil ;
+- le **worker navigateur** peut tourner sur un petit boîtier dédié (Raspberry Pi / mini-PC / NAS, ~3-8 W) : voir [tools/live_worker/README.md](tools/live_worker/README.md) pour le kit complet (lanceur Chromium `run-live-worker.sh`, unité systemd `max-explorer-live-worker.service`, watchdog `check_live_worker.py` avec codes de sortie 0/1/2 utilisable en cron pour recevoir les alertes 0 EUR par mail).
+
+Un VPS pas cher fonctionne aussi mais subit plus de blocages DataDome (IP datacenter). Un téléphone ne peut pas héberger l'extension (Chrome mobile sans extensions).
+
+Si la session SNCF Connect expire côté worker, une seule recherche manuelle sur SNCF Connect suffit à réamorcer les surveillances (le seed `itineraries` est recapturé automatiquement).

@@ -79,7 +79,8 @@ Conditions :
 
 - Chrome/Chromium doit rester ouvert,
 - au moins un onglet SNCF Connect doit rester ouvert,
-- la session SNCF Connect doit rester valide.
+- la session SNCF Connect doit rester valide,
+- la machine doit rester allumée et non en veille : pour du 24/7 sans PC portable, voir [tools/live_worker/README.md](../live_worker/README.md) (Raspberry Pi / mini-PC + systemd + watchdog cron). Les notifications navigateur restent locales à la machine worker ; les alertes à distance passent par la page `/live-watch` du backend (Render) et `tools/live_worker/check_live_worker.py`.
 
 ## Backend configurable
 
