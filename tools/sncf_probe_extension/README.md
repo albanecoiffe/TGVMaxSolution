@@ -57,7 +57,8 @@ sans refaire la recherche manuellement dans l'interface SNCF Connect. Les noms d
 
 ## Surveillance automatique
 
-Le bouton `Surveiller` enregistre le trajet courant du formulaire et active une verification automatique toutes les 5 minutes.
+Le bouton `Surveiller` enregistre le trajet courant du formulaire et active une verification automatique toutes les 1 minute.
+Entre 06:00 et 12:00 (heure locale), une alarme « burst » accélère la cadence à toutes les 30 s pour capter les ouvertures de places du matin (constantes `BURST_START_HOUR` / `BURST_END_HOUR` / `BURST_INTERVAL_MINUTES` dans `background.js`).
 Un premier check est lance immediatement apres la creation de la surveillance.
 
 Pour la surveillance, l'heure du formulaire est ignoree :
@@ -69,15 +70,17 @@ Pour la surveillance, l'heure du formulaire est ignoree :
 Comportement :
 
 - l'extension cherche un onglet `sncf-connect.com` ouvert,
-- rejoue l'appel `itineraries` dans ce vrai navigateur,
-- compare les `travelId` a `0 €` avec l'etat precedent,
-- affiche une notification locale quand un nouveau train a `0 €` apparait.
+- les surveillances sont regroupees par trajet (origine -> destination) : au moins un appel `itineraries` par trajet et par cycle, et jusqu'a 3 scans de dates par cycle (`MAX_SCAN_SLOTS_PER_OD`), en priorisant les dates deja signalees a `0 €` puis les moins recemment verifiees,
+- chaque reponse `itineraries` contient `bestPrices` : le meilleur prix par jour sur ~30 jours. L'extension en extrait le calendrier des jours a `0 €` pour tout le trajet, rafraichi a chaque cycle,
+- elle compare les `travelId` a `0 €` de la date scannee avec l'etat precedent,
+- elle affiche une notification locale quand un nouveau train a `0 €` apparait (`zero_added`) ou quand un nouveau jour a `0 €` apparait (`zero_day_added`), et loggue aussi les disparitions (`zero_removed`, `zero_day_removed`).
 
 Conditions :
 
 - Chrome/Chromium doit rester ouvert,
 - au moins un onglet SNCF Connect doit rester ouvert,
-- la session SNCF Connect doit rester valide.
+- la session SNCF Connect doit rester valide,
+- la machine doit rester allumée et non en veille : pour du 24/7 sans PC portable, voir [tools/live_worker/README.md](../live_worker/README.md) (Raspberry Pi / mini-PC + systemd + watchdog cron). Les notifications navigateur restent locales à la machine worker ; les alertes à distance passent par la page `/live-watch` du backend (Render) et `tools/live_worker/check_live_worker.py`.
 
 ## Backend configurable
 

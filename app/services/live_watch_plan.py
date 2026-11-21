@@ -41,6 +41,62 @@ class LiveWatchPlanStore:
         }
         return self.save(payload)
 
+    def build_full_month_plan(
+        self,
+        origin_label: str,
+        destination_label: str,
+        available_dates: list[str],
+        include_return: bool = False,
+        dates: list[str] | None = None,
+    ) -> dict:
+        if dates:
+            selected_dates = sorted({str(value)[:10] for value in dates})
+        else:
+            today = date.today()
+            max_date = today + timedelta(days=31)
+            selected_dates = sorted(
+                {
+                    raw_value
+                    for raw_value in available_dates
+                    if today <= date.fromisoformat(raw_value) <= max_date
+                }
+            )
+
+        watches = []
+        for candidate in selected_dates:
+            watches.append(
+                {
+                    "id": f"{origin_label}|{destination_label}|{candidate}",
+                    "origin_label": origin_label,
+                    "destination_label": destination_label,
+                    "watch_date": candidate,
+                    "rule_label": "full_month",
+                }
+            )
+            if include_return:
+                watches.append(
+                    {
+                        "id": f"{destination_label}|{origin_label}|{candidate}",
+                        "origin_label": destination_label,
+                        "destination_label": origin_label,
+                        "watch_date": candidate,
+                        "rule_label": "full_month_return",
+                    }
+                )
+
+        payload = {
+            "has_plan": True,
+            "source": f"full_month_{origin_label}_{destination_label}",
+            "generated_at": date.today().isoformat(),
+            "watch_count": len(watches),
+            "watches": watches,
+            "message": (
+                f"plan full month {origin_label} -> {destination_label} "
+                f"sur {len(selected_dates)} date(s) a partir des dates fournies"
+            ),
+        }
+        return self.save(payload)
+
     def build_default_weekend_plan(self, available_dates: list[str]) -> dict:
         today = date.today()
         max_date = today + timedelta(days=31)

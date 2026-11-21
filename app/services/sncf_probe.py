@@ -25,8 +25,55 @@ BEST_PRICE_RE = re.compile(
     r'"label":"(?P<label>[^"]+)","priceLabel":"(?P<price>[^"]+)","bestPriceDateTime":"(?P<dt>[^"]+)"'
 )
 FARE_NAME_RE = re.compile(r'"fareName":"(?P<fare>[^"]+)"')
-ZERO_PRICE_RE = re.compile(r'"priceLabel":"0\\u00a0€"|"priceLabel":"0 €"')
+ZERO_PRICE_RE = re.compile(
+    r'"priceLabel":"0(?:\\u00a0|\u00a0)(?:\\u20ac|\u20ac)"'
+)
 OFFER_TITLE_RE = re.compile(r'"header":\{"title":"(?P<title>[^"]+)","accessibilityTitle":"[^"]+","subtitle":"(?P<subtitle>[^"]+)"')
+
+
+def is_zero_price_label(label: object) -> bool:
+    if not isinstance(label, str):
+        return False
+    normalized = (
+        label.replace("\\u00a0", "\u00a0")
+        .replace("\\u20ac", "\u20ac")
+        .replace("\u00a0", " ")
+        .strip()
+        .lower()
+    )
+    return normalized in {"0 \u20ac", "0\u20ac"}
+
+
+def extract_zero_days(best_prices: list) -> list[dict]:
+    days: dict[str, dict] = {}
+    for item in best_prices or []:
+        if not isinstance(item, dict):
+            continue
+        price = item.get("priceLabel") or item.get("price_label")
+        if not is_zero_price_label(price):
+            continue
+        best_price_datetime = item.get("bestPriceDateTime") or item.get("best_price_datetime")
+        date_part = best_price_datetime[:10] if isinstance(best_price_datetime, str) and len(best_price_datetime) >= 10 else None
+        if not date_part:
+            continue
+        if date_part not in days:
+            days[date_part] = {
+                "date": date_part,
+                "label": item.get("label"),
+                "best_price_datetime": best_price_datetime,
+            }
+    return [days[key] for key in sorted(days)]
+
+
+def extract_zero_travel_ids(zero_offers: list) -> list[str]:
+    travel_ids: list[str] = []
+    for offer in zero_offers or []:
+        if not isinstance(offer, dict):
+            continue
+        travel_id = offer.get("travelId") or offer.get("travel_id")
+        if isinstance(travel_id, str) and travel_id and travel_id not in travel_ids:
+            travel_ids.append(travel_id)
+    return travel_ids
 
 
 def load_probe_events(path: Path) -> list[dict]:
@@ -205,6 +252,16 @@ def summarize_itinerary_event(event: dict) -> dict:
     main_journey = request.get("mainJourney") or {}
     passengers = request.get("passengers") or []
 
+    best_price_labels = [
+        {
+            "label": item.get("label"),
+            "price_label": item.get("priceLabel") or item.get("price_label"),
+            "best_price_datetime": item.get("bestPriceDateTime") or item.get("best_price_datetime"),
+        }
+        for item in best_prices
+        if isinstance(item, dict)
+    ]
+
     return {
         "tab_url": event.get("tabUrl"),
         "request": {
@@ -223,18 +280,12 @@ def summarize_itinerary_event(event: dict) -> dict:
             ),
         },
         "response": {
-            "best_price_labels": [
-                {
-                    "label": item.get("label"),
-                    "price_label": item.get("priceLabel") or item.get("price_label"),
-                    "best_price_datetime": item.get("bestPriceDateTime") or item.get("best_price_datetime"),
-                }
-                for item in best_prices
-                if isinstance(item, dict)
-            ],
+            "best_price_labels": best_price_labels,
             "zero_best_price_days": len(zero_best_prices),
+            "zero_days": extract_zero_days(best_price_labels),
             "zero_offer_count": len(zero_offers),
             "zero_offers": zero_offers,
+            "zero_travel_ids": extract_zero_travel_ids(zero_offers),
             "fare_names": sorted(fares_counter),
         },
     }

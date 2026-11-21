@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 
-from app.services.sncf_probe import redact_sensitive_data, summarize_probe_file
+from app.services.sncf_probe import (
+    extract_zero_days,
+    extract_zero_travel_ids,
+    is_zero_price_label,
+    redact_sensitive_data,
+    summarize_itinerary_event,
+    summarize_probe_file,
+)
 
 
 PROBE_SAMPLE = [
@@ -117,4 +124,81 @@ def test_summarize_probe_file_extracts_zero_max_offers(tmp_path):
     assert itinerary["response"]["zero_best_price_days"] == 1
     assert itinerary["response"]["zero_offer_count"] == 1
     assert itinerary["response"]["fare_names"] == ["Tarif MAX JEUNE"]
+    assert itinerary["response"]["zero_days"] == [
+        {"date": "2026-05-16", "label": "Sam 16", "best_price_datetime": "2026-05-16T06:23:00"}
+    ]
+    assert itinerary["response"]["zero_travel_ids"] == ["travel-1"]
     assert itinerary["response"]["zero_offers"][0]["price_label"] == "0\u00a0€"
+
+
+NBSP = chr(0xA0)
+EURO = chr(0x20AC)
+
+
+def test_is_zero_price_label_accepts_nbsp_variants():
+    assert is_zero_price_label("0" + NBSP + EURO) is True
+    assert is_zero_price_label("0 " + EURO) is True
+    assert is_zero_price_label("0" + EURO) is True
+    assert is_zero_price_label("0\\u00a0\\u20ac") is True
+    assert is_zero_price_label("60" + NBSP + EURO) is False
+    assert is_zero_price_label(None) is False
+
+
+def test_extract_zero_days_merges_and_sorts_by_date():
+    best_prices = [
+        {"label": "Dim 17", "priceLabel": "60" + NBSP + EURO, "bestPriceDateTime": "2026-05-17T21:38:00"},
+        {"label": "Sam 16", "price_label": "0" + NBSP + EURO, "best_price_datetime": "2026-05-16T06:23:00"},
+        {"label": "Lun 18", "priceLabel": "0" + NBSP + EURO, "bestPriceDateTime": "2026-05-18T07:00:00"},
+        {"label": "Lun 18 bis", "priceLabel": "0" + NBSP + EURO, "bestPriceDateTime": "2026-05-18T09:00:00"},
+        {"label": "Sans date", "priceLabel": "0" + NBSP + EURO, "bestPriceDateTime": None},
+    ]
+
+    zero_days = extract_zero_days(best_prices)
+
+    assert [day["date"] for day in zero_days] == ["2026-05-16", "2026-05-18"]
+    assert zero_days[1]["label"] == "Lun 18"
+
+
+def test_extract_zero_travel_ids_deduplicates():
+    offers = [
+        {"travelId": "travel-1"},
+        {"travel_id": "travel-2"},
+        {"travelId": "travel-1"},
+        {"travelId": None},
+        "not-a-dict",
+    ]
+
+    assert extract_zero_travel_ids(offers) == ["travel-1", "travel-2"]
+
+
+def test_summarize_itinerary_event_falls_back_to_regex_on_truncated_body():
+    raw_body = (
+        '{"longDistance":{"proposals":{"bestPrices":['
+        '{"label":"Sam 16","priceLabel":"0\\u00a0\\u20ac","bestPriceDateTime":"2026-05-16T06:23:00"}'
+        '],"proposals":[{"id":"proposal-1","travelId":"travel-9",'
+        '"header":{"title":"2de classe","accessibilityTitle":"x","subtitle":"Tarif Max Jeune"},'
+        '"priceLabel":"0\\u00a0\\u20ac"}]}}}'
+    )
+    event = {
+        "url": "https://www.sncf-connect.com/bff/api/v1/itineraries",
+        "requestBodyPreview": json.dumps(
+            {
+                "schedule": {"outward": {"date": "2026-05-16T04:00:00.000Z"}},
+                "mainJourney": {
+                    "origin": {"label": "Paris Montparnasse"},
+                    "destination": {"label": "Bordeaux Saint-Jean"},
+                },
+                "passengers": [{"discountCards": [{"code": "TGV_MAX"}]}],
+            }
+        ),
+        "bodyPreview": raw_body[:-5],
+    }
+
+    summary = summarize_itinerary_event(event)
+    response = summary["response"]
+
+    assert response["zero_offer_count"] == 1
+    assert response["zero_offers"][0]["offer_title"] == "2de classe"
+    assert response["zero_days"] == [
+        {"date": "2026-05-16", "label": "Sam 16", "best_price_datetime": "2026-05-16T06:23:00"}
+    ]

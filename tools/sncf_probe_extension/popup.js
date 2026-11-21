@@ -149,6 +149,10 @@ function historyLabel(entry) {
       return `Nouveau 0 €: ${entry.count || 0} train(s)`;
     case "zero_removed":
       return `0 € retire: ${entry.count || 0} train(s)`;
+    case "zero_day_added":
+      return `Nouveau jour à 0 €: ${entry.count || 0} jour(s)`;
+    case "zero_day_removed":
+      return `Jour 0 € retiré: ${entry.count || 0} jour(s)`;
     case "check_error":
       return `Erreur: ${entry.error || "Replay impossible"}`;
     case "check_ok":
@@ -210,6 +214,7 @@ function renderWatchSummary(watches) {
   const errorCount = watches.filter((watch) => watch.lastStatus === "error").length;
   const pendingCount = watches.filter((watch) => watch.lastStatus === "waiting_tab" || watch.lastStatus === "pending").length;
   const totalZeroTrains = watches.reduce((sum, watch) => sum + (watch.lastZeroTravelIds?.length || 0), 0);
+  const totalZeroDays = watches.reduce((sum, watch) => sum + (watch.lastZeroDays?.length || 0), 0);
 
   watchSummaryNode.innerHTML = `
     <div class="summary-row">
@@ -217,6 +222,7 @@ function renderWatchSummary(watches) {
       <span class="summary-chip">${okCount} OK</span>
       <span class="summary-chip">${liveZeroCount} avec 0 €</span>
       <span class="summary-chip">${totalZeroTrains} train(s) 0 € visibles</span>
+      <span class="summary-chip">${totalZeroDays} jour(s) 0 € détecté(s)</span>
       <span class="summary-chip">${errorCount} erreur(s)</span>
       <span class="summary-chip">${pendingCount} en attente</span>
     </div>
@@ -238,7 +244,7 @@ function renderWatches(watches) {
     route.textContent = `${watch.originLabel} → ${watch.destinationLabel}`;
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${formatWatchDate(watch.watchDate)} | journée entière | ${watch.lastZeroTravelIds?.length || 0} train(s) à 0 €`;
+    meta.textContent = `${formatWatchDate(watch.watchDate)} | journée entière | ${watch.lastZeroTravelIds?.length || 0} train(s) à 0 € | ${(watch.lastZeroDays || []).length} jour(s) à 0 €`;
     const health = document.createElement("div");
     health.className = "meta";
     health.textContent = `Etat: ${watchStatusLabel(watch)} | checks: ${watch.checkCount || 0} | succes: ${watch.successCount || 0}`;
@@ -405,7 +411,7 @@ document.getElementById("watch").addEventListener("click", async () => {
     setStatus(`Erreur surveillance: ${response?.error || "inconnue"}`);
     return;
   }
-  setStatus("Surveillance active. Premier check lance, puis verification toutes les 5 minutes si un onglet SNCF Connect est ouvert.");
+  setStatus("Surveillance active. Premier check lance, puis verification toutes les minutes (toutes les 30 s entre 06:00 et 12:00) si un onglet SNCF Connect est ouvert.");
   await refresh();
 });
 

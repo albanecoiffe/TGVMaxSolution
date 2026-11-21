@@ -6,7 +6,13 @@ const BACKEND_BASE_URL_STORAGE_KEY = "sncf_probe_backend_base_url";
 const MAX_EVENTS = 200;
 const WATCH_ALARM_NAME = "sncf-probe-watch-alarm";
 const WATCH_INTERVAL_MINUTES = 1;
+const WATCH_BURST_ALARM_NAME = "sncf-probe-watch-burst-alarm";
+const BURST_INTERVAL_MINUTES = 0.5;
+const BURST_START_HOUR = 6;
+const BURST_END_HOUR = 12;
+const MAX_SCAN_SLOTS_PER_OD = 3;
 const WATCH_HISTORY_LIMIT = 12;
+let cycleInFlight = false;
 const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8000";
 const WATCH_TAB_URL = "https://www.sncf-connect.com/home/search";
 const NOTIFICATION_ICON_DATA_URL =
@@ -132,6 +138,7 @@ function buildStoredWatchFromPlan(plannedWatch, existing, latestEvent) {
     checkCount: existing?.checkCount || 0,
     successCount: existing?.successCount || 0,
     lastZeroTravelIds: existing?.lastZeroTravelIds || [],
+    lastZeroDays: existing?.lastZeroDays || [],
     lastReplay: existing?.lastReplay || null,
     lastError: existing?.lastError || null,
     history: existing?.history || [],
@@ -304,6 +311,55 @@ function extractZeroTravelIds(replayPayload) {
     .filter((value) => typeof value === "string" && value);
 }
 
+function extractZeroDays(replayPayload) {
+  const labels = replayPayload?.response?.bestPriceLabels || [];
+  const seen = new Set();
+  const days = [];
+  for (const item of labels) {
+    if (item?.priceLabel !== "0\u00a0\u20ac") {
+      continue;
+    }
+    const bestPriceDateTime = typeof item?.bestPriceDateTime === "string" ? item.bestPriceDateTime : "";
+    const date = bestPriceDateTime.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || seen.has(date)) {
+      continue;
+    }
+    seen.add(date);
+    days.push({
+      date,
+      label: item?.label || null,
+      best_price_datetime: bestPriceDateTime || null,
+    });
+  }
+  days.sort((left, right) => left.date.localeCompare(right.date));
+  return days;
+}
+
+function watchOdKey(watch) {
+  return `${watch.originLabel || ""}|${watch.destinationLabel || ""}`;
+}
+
+function isBurstWindow(date = new Date()) {
+  const hour = date.getHours();
+  return hour >= BURST_START_HOUR && hour < BURST_END_HOUR;
+}
+
+async function syncBurstAlarm() {
+  const existing = await chrome.alarms.get(WATCH_BURST_ALARM_NAME);
+  if (isBurstWindow()) {
+    if (!existing) {
+      await chrome.alarms.create(WATCH_BURST_ALARM_NAME, {
+        delayInMinutes: BURST_INTERVAL_MINUTES,
+        periodInMinutes: BURST_INTERVAL_MINUTES,
+      });
+    }
+    return;
+  }
+  if (existing) {
+    await chrome.alarms.clear(WATCH_BURST_ALARM_NAME);
+  }
+}
+
 async function notifyNewZeroOffers(watch, newTravelIds, replayPayload) {
   const routeLabel = `${watch.originLabel} → ${watch.destinationLabel}`;
   const departures = (replayPayload?.response?.zeroOffers || [])
@@ -317,6 +373,25 @@ async function notifyNewZeroOffers(watch, newTravelIds, replayPayload) {
     : `${newTravelIds.length} nouveau(x) train(s) à 0 € détecté(s).`;
 
   await chrome.notifications.create(`sncf-probe-${Date.now()}`, {
+    type: "basic",
+    iconUrl: NOTIFICATION_ICON_DATA_URL,
+    title: routeLabel,
+    message,
+  });
+}
+
+async function notifyNewZeroDays(watch, newDays) {
+  const routeLabel = `${watch.originLabel} → ${watch.destinationLabel}`;
+  const days = newDays
+    .map((day) => day?.label || day?.date)
+    .filter(Boolean)
+    .slice(0, 8)
+    .join(", ");
+  const message = days
+    ? `${newDays.length} nouveau(x) jour(s) à 0 €: ${days}`
+    : `${newDays.length} nouveau(x) jour(s) à 0 € détecté(s).`;
+
+  await chrome.notifications.create(`sncf-probe-day-${Date.now()}`, {
     type: "basic",
     iconUrl: NOTIFICATION_ICON_DATA_URL,
     title: routeLabel,
@@ -346,6 +421,8 @@ function buildLiveWatchPayload(watches) {
     last_alert_at: watch.lastAlertAt || null,
     last_error: watch.lastError || null,
     zero_offers: watch.lastReplay?.response?.zeroOffers || [],
+    zero_days: watch.lastZeroDays || [],
+    zero_day_count: (watch.lastZeroDays || []).length,
     history: watch.history || [],
   }));
 
@@ -359,6 +436,7 @@ function buildLiveWatchPayload(watches) {
       waiting_count: normalizedWatches.filter((watch) => watch.status === "waiting_tab" || watch.status === "pending").length,
       zero_watch_count: normalizedWatches.filter((watch) => watch.zero_offer_count > 0).length,
       zero_offer_count: normalizedWatches.reduce((sum, watch) => sum + watch.zero_offer_count, 0),
+      zero_day_count: normalizedWatches.reduce((sum, watch) => sum + (watch.zero_day_count || 0), 0),
     },
     watches: normalizedWatches,
   };
@@ -452,56 +530,37 @@ function prependWatchHistory(watch, entries) {
   return trimWatchHistory([...nextEntries, ...(watch.history || [])]);
 }
 
-async function runWatchCycle() {
-  const watches = await hydrateWatchesFromPlan();
-  if (!watches.length) {
-    return;
-  }
+async function runOdGroupCycle(groupWatches, checkedAt) {
+  const sorted = [...groupWatches].sort((left, right) => {
+    const leftZero = (left.lastZeroDays || []).length > 0 ? 0 : 1;
+    const rightZero = (right.lastZeroDays || []).length > 0 ? 0 : 1;
+    if (leftZero !== rightZero) {
+      return leftZero - rightZero;
+    }
+    return (left.lastCheckedAt || "").localeCompare(right.lastCheckedAt || "");
+  });
+  const slots = sorted.slice(0, MAX_SCAN_SLOTS_PER_OD);
+  const updatesById = new Map();
+  let freshZeroDays = null;
 
-  const checkedAt = nowIso();
-  const dedicatedTab = await ensureDedicatedWatchTab();
-  if (!dedicatedTab?.id) {
-    const nextWatches = watches.map((watch) =>
-      updateWatchState(watch, {
-        lastCheckedAt: checkedAt,
-        lastStatus: "waiting_tab",
-        lastError: "Impossible d'ouvrir un onglet SNCF Connect",
-        checkCount: (watch.checkCount || 0) + 1,
-      })
-    );
-    await saveWatches(nextWatches);
-    await syncWatchesToBackend(nextWatches);
-    await syncWorkerHeartbeat({
-      captured_at: checkedAt,
-      backend_base_url: await loadBackendBaseUrl(),
-      status: "error",
-      watch_tab_url: null,
-      watch_tab_id: null,
-      watch_count: nextWatches.length,
-      browser_open: true,
-      sncf_tab_ready: false,
-      last_error: "Impossible d'ouvrir un onglet SNCF Connect",
-      session_hint: "reconnexion_sncf_possible",
-    });
-    return;
-  }
-
-  const nextWatches = [];
-  for (const watch of watches) {
-    const preparedWatch = watch;
+  for (const watch of slots) {
     const response = await replayOnAnySncfTab({
       url: "https://www.sncf-connect.com/bff/api/v1/itineraries",
       method: "POST",
-      headers: preparedWatch.headers,
-      requestBodyPreview: preparedWatch.requestBodyPreview,
+      headers: watch.headers,
+      requestBodyPreview: watch.requestBodyPreview,
       overrides: {
-        originLabel: preparedWatch.originLabel,
-        destinationLabel: preparedWatch.destinationLabel,
-        outwardDate: buildWatchReplayIso(preparedWatch.watchDate),
+        originLabel: watch.originLabel,
+        destinationLabel: watch.destinationLabel,
+        outwardDate: buildWatchReplayIso(watch.watchDate),
       },
     });
 
-    const previousTravelIds = Array.isArray(preparedWatch.lastZeroTravelIds) ? preparedWatch.lastZeroTravelIds : [];
+    if (response?.ok) {
+      freshZeroDays = extractZeroDays(response.payload);
+    }
+
+    const previousTravelIds = Array.isArray(watch.lastZeroTravelIds) ? watch.lastZeroTravelIds : [];
     const currentTravelIds = response?.ok ? extractZeroTravelIds(response.payload) : previousTravelIds;
     const newTravelIds = currentTravelIds.filter((travelId) => !previousTravelIds.includes(travelId));
     const removedTravelIds = previousTravelIds.filter((travelId) => !currentTravelIds.includes(travelId));
@@ -541,21 +600,125 @@ async function runWatchCycle() {
       );
     }
 
-    nextWatches.push(
-      updateWatchState(preparedWatch, {
+    updatesById.set(
+      watch.id,
+      updateWatchState(watch, {
         lastCheckedAt: checkedAt,
-        lastSuccessAt: response?.ok ? checkedAt : preparedWatch.lastSuccessAt || null,
-        lastAlertAt: alertAt || preparedWatch.lastAlertAt || null,
-        lastAlertCount: alertAt ? newTravelIds.length : preparedWatch.lastAlertCount || 0,
+        lastSuccessAt: response?.ok ? checkedAt : watch.lastSuccessAt || null,
+        lastAlertAt: alertAt || watch.lastAlertAt || null,
+        lastAlertCount: alertAt ? newTravelIds.length : watch.lastAlertCount || 0,
         lastStatus: response?.ok ? "ok" : "error",
-        checkCount: (preparedWatch.checkCount || 0) + 1,
-        successCount: response?.ok ? (preparedWatch.successCount || 0) + 1 : preparedWatch.successCount || 0,
+        checkCount: (watch.checkCount || 0) + 1,
+        successCount: response?.ok ? (watch.successCount || 0) + 1 : watch.successCount || 0,
         lastZeroTravelIds: currentTravelIds,
-        lastReplay: response?.ok ? response.payload : preparedWatch.lastReplay || null,
+        lastReplay: response?.ok ? response.payload : watch.lastReplay || null,
         lastError: response?.ok ? null : response?.error || "Replay impossible",
-        history: prependWatchHistory(preparedWatch, historyEntries),
+        history: prependWatchHistory(watch, historyEntries),
       })
     );
+  }
+
+  const primary = slots[0];
+  const previousZeroDays = Array.isArray(primary.lastZeroDays) ? primary.lastZeroDays : [];
+  const currentZeroDays = freshZeroDays || previousZeroDays;
+  const previousDayDates = new Set(previousZeroDays.map((day) => day?.date));
+  const currentDayDates = new Set(currentZeroDays.map((day) => day?.date));
+  const newDays = currentZeroDays.filter((day) => !previousDayDates.has(day?.date));
+  const removedDays = previousZeroDays.filter((day) => !currentDayDates.has(day?.date));
+  const dayAlertAt = freshZeroDays && previousZeroDays.length > 0 && newDays.length > 0 ? nowIso() : null;
+  if (dayAlertAt) {
+    await notifyNewZeroDays(primary, newDays);
+  }
+
+  const dayHistoryEntries = [];
+  if (dayAlertAt) {
+    dayHistoryEntries.push(
+      buildHistoryEntry("zero_day_added", checkedAt, {
+        count: newDays.length,
+        days: newDays.map((day) => day?.date),
+      })
+    );
+  }
+  if (freshZeroDays && removedDays.length > 0) {
+    dayHistoryEntries.push(
+      buildHistoryEntry("zero_day_removed", checkedAt, {
+        count: removedDays.length,
+        days: removedDays.map((day) => day?.date),
+      })
+    );
+  }
+
+  return groupWatches.map((watch) => {
+    const scanned = updatesById.get(watch.id);
+    let next = updateWatchState(scanned || watch, { lastZeroDays: currentZeroDays });
+    if (watch.id === primary.id && dayHistoryEntries.length) {
+      next = updateWatchState(next, { history: prependWatchHistory(next, dayHistoryEntries) });
+    }
+    return next;
+  });
+}
+
+async function runWatchCycle() {
+  if (cycleInFlight) {
+    return;
+  }
+  cycleInFlight = true;
+  try {
+    await runWatchCycleInner();
+  } catch (_error) {
+    // Keep the polling loop alive on unexpected failures.
+  } finally {
+    cycleInFlight = false;
+    await syncBurstAlarm().catch(() => {});
+  }
+}
+
+async function runWatchCycleInner() {
+  const watches = await hydrateWatchesFromPlan();
+  if (!watches.length) {
+    return;
+  }
+
+  const checkedAt = nowIso();
+  const dedicatedTab = await ensureDedicatedWatchTab();
+  if (!dedicatedTab?.id) {
+    const nextWatches = watches.map((watch) =>
+      updateWatchState(watch, {
+        lastCheckedAt: checkedAt,
+        lastStatus: "waiting_tab",
+        lastError: "Impossible d'ouvrir un onglet SNCF Connect",
+        checkCount: (watch.checkCount || 0) + 1,
+      })
+    );
+    await saveWatches(nextWatches);
+    await syncWatchesToBackend(nextWatches);
+    await syncWorkerHeartbeat({
+      captured_at: checkedAt,
+      backend_base_url: await loadBackendBaseUrl(),
+      status: "error",
+      watch_tab_url: null,
+      watch_tab_id: null,
+      watch_count: nextWatches.length,
+      browser_open: true,
+      sncf_tab_ready: false,
+      last_error: "Impossible d'ouvrir un onglet SNCF Connect",
+      session_hint: "reconnexion_sncf_possible",
+    });
+    return;
+  }
+
+  const groups = new Map();
+  for (const watch of watches) {
+    const key = watchOdKey(watch);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(watch);
+  }
+
+  const nextWatches = [];
+  for (const groupWatches of groups.values()) {
+    nextWatches.push(...(await runOdGroupCycle(groupWatches, checkedAt)));
   }
 
   await saveWatches(nextWatches);
@@ -714,6 +877,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           checkCount: 0,
           successCount: 0,
           lastZeroTravelIds: [],
+          lastZeroDays: [],
           lastReplay: null,
           lastError: null,
           history: [],
@@ -788,6 +952,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureWatchAlarm();
+  syncBurstAlarm().catch(() => {});
   runWatchCycle().catch(() => {
     // Ignore startup polling errors.
   });
@@ -795,13 +960,14 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onStartup.addListener(() => {
   ensureWatchAlarm();
+  syncBurstAlarm().catch(() => {});
   runWatchCycle().catch(() => {
     // Ignore startup polling errors.
   });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== WATCH_ALARM_NAME) {
+  if (alarm.name !== WATCH_ALARM_NAME && alarm.name !== WATCH_BURST_ALARM_NAME) {
     return;
   }
   runWatchCycle().catch(() => {

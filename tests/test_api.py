@@ -379,3 +379,225 @@ def test_direct_endpoint_is_cached_until_refresh(settings, monkeypatch):
     third = client.get("/api/direct", params=params)
     assert third.status_code == 200
     assert call_count["value"] >= 2
+
+
+def _live_watch_payload_with_zero_days() -> dict:
+    return {
+        "source": "sncf-probe-extension",
+        "captured_at": "2026-05-15T09:00:00Z",
+        "summary": {
+            "watch_count": 2,
+            "ok_count": 2,
+            "error_count": 0,
+            "waiting_count": 0,
+            "zero_watch_count": 1,
+            "zero_offer_count": 1,
+            "zero_day_count": 3,
+        },
+        "watches": [
+            {
+                "id": "Paris Montparnasse|Bordeaux Saint-Jean|2026-05-23",
+                "origin_label": "Paris Montparnasse",
+                "destination_label": "Bordeaux Saint-Jean",
+                "watch_date": "2026-05-23",
+                "status": "ok",
+                "zero_offer_count": 1,
+                "zero_days": [
+                    {"date": "2026-05-23", "label": "Sam 23", "best_price_datetime": "2026-05-23T06:23:00"},
+                    {"date": "2026-05-24", "label": "Dim 24", "best_price_datetime": "2026-05-24T07:00:00"},
+                ],
+                "last_checked_at": "2026-05-15T08:59:00Z",
+                "history": [
+                    {"type": "zero_day_added", "at": "2026-05-15T08:40:00Z", "count": 1, "days": ["2026-05-24"]}
+                ],
+            },
+            {
+                "id": "Paris Montparnasse|Bordeaux Saint-Jean|2026-05-30",
+                "origin_label": "Paris Montparnasse",
+                "destination_label": "Bordeaux Saint-Jean",
+                "watch_date": "2026-05-30",
+                "status": "ok",
+                "zero_offer_count": 0,
+                "zero_days": [
+                    {"date": "2026-05-30", "label": "Sam 30", "best_price_datetime": "2026-05-30T08:00:00"}
+                ],
+                "last_checked_at": "2026-05-15T09:00:00Z",
+                "history": [],
+            },
+        ],
+    }
+
+
+def test_live_watch_zero_calendar_and_history(settings):
+    client = TestClient(create_app(settings))
+
+    empty_calendar = client.get("/api/live-watch/zero-calendar")
+    assert empty_calendar.status_code == 200
+    assert empty_calendar.json()["has_live_watch"] is False
+    assert empty_calendar.json()["zero_calendar"] == []
+
+    empty_history = client.get("/api/live-watch/history")
+    assert empty_history.status_code == 200
+    assert empty_history.json()["has_history"] is False
+
+    payload = _live_watch_payload_with_zero_days()
+    ingest = client.post("/api/live-watch/ingest", json=payload)
+    assert ingest.status_code == 200
+    ingest_payload = ingest.json()
+    assert ingest_payload["summary"]["zero_day_count"] == 3
+    assert len(ingest_payload["zero_calendar"]) == 1
+    calendar = ingest_payload["zero_calendar"][0]
+    assert calendar["route"] == "Paris Montparnasse → Bordeaux Saint-Jean"
+    assert calendar["zero_day_count"] == 3
+    assert [day["date"] for day in calendar["zero_days"]] == ["2026-05-23", "2026-05-24", "2026-05-30"]
+    assert calendar["last_checked_at"] == "2026-05-15T09:00:00Z"
+
+    latest = client.get("/api/live-watch/latest")
+    assert latest.status_code == 200
+    latest_payload = latest.json()
+    assert latest_payload["watches"][0]["zero_day_count"] == 2
+    assert latest_payload["zero_calendar"][0]["zero_day_count"] == 3
+
+    calendar_endpoint = client.get("/api/live-watch/zero-calendar")
+    assert calendar_endpoint.status_code == 200
+    assert calendar_endpoint.json()["has_live_watch"] is True
+    assert calendar_endpoint.json()["zero_calendar"][0]["zero_day_count"] == 3
+
+    history = client.get("/api/live-watch/history", params={"limit": 10})
+    assert history.status_code == 200
+    history_payload = history.json()
+    assert history_payload["has_history"] is True
+    assert history_payload["count"] == 1
+    assert history_payload["entries"][0]["summary"]["zero_offer_count"] == 1
+
+    second = client.post("/api/live-watch/ingest", json=payload)
+    assert second.status_code == 200
+    history_after = client.get("/api/live-watch/history")
+    assert history_after.json()["count"] == 2
+    assert history_after.json()["entries"][0]["captured_at"] == "2026-05-15T09:00:00Z"
+
+
+def test_live_watch_zero_calendar_falls_back_to_watch_date(settings):
+    client = TestClient(create_app(settings))
+
+    payload = {
+        "source": "sncf-probe-extension",
+        "captured_at": "2026-05-15T09:05:00Z",
+        "summary": {"watch_count": 1},
+        "watches": [
+            {
+                "id": "Paris|Lyon|2026-05-23",
+                "origin_label": "Paris",
+                "destination_label": "Lyon Part Dieu",
+                "watch_date": "2026-05-23",
+                "status": "ok",
+                "zero_offer_count": 2,
+                "last_checked_at": "2026-05-15T09:04:00Z",
+                "history": [],
+            }
+        ],
+    }
+
+    ingest = client.post("/api/live-watch/ingest", json=payload)
+    assert ingest.status_code == 200
+    calendar = ingest.json()["zero_calendar"]
+    assert len(calendar) == 1
+    assert calendar[0]["zero_days"] == [{"date": "2026-05-23", "label": None, "best_price_datetime": None}]
+    assert ingest.json()["summary"]["zero_day_count"] == 1
+
+
+def test_live_watch_full_month_plan_endpoint(settings):
+    client = TestClient(create_app(settings))
+
+    bad = client.post(
+        "/api/live-watch/plan/full-month",
+        json={"origin_label": "", "destination_label": "Bordeaux Saint-Jean"},
+    )
+    assert bad.status_code == 422
+
+    response = client.post(
+        "/api/live-watch/plan/full-month",
+        json={
+            "origin_label": "Paris Montparnasse",
+            "destination_label": "Bordeaux Saint-Jean",
+            "dates": ["2026-05-25", "2026-05-23", "2026-05-24", "2026-05-23"],
+        },
+    )
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["has_plan"] is True
+    assert plan["watch_count"] == 3
+    assert [item["watch_date"] for item in plan["watches"]] == ["2026-05-23", "2026-05-24", "2026-05-25"]
+    assert all(item["rule_label"] == "full_month" for item in plan["watches"])
+
+    with_return = client.post(
+        "/api/live-watch/plan/full-month",
+        json={
+            "origin_label": "Paris Montparnasse",
+            "destination_label": "Bordeaux Saint-Jean",
+            "include_return": True,
+            "dates": ["2026-05-23"],
+        },
+    )
+    assert with_return.status_code == 200
+    assert with_return.json()["watch_count"] == 2
+    assert any(item["origin_label"] == "Bordeaux Saint-Jean" for item in with_return.json()["watches"])
+
+    latest_plan = client.get("/api/live-watch/plan")
+    assert latest_plan.status_code == 200
+    assert latest_plan.json()["has_plan"] is True
+    assert latest_plan.json()["watch_count"] == 2
+
+
+def test_live_watch_zero_vs_dataset_endpoint(settings):
+    client = TestClient(create_app(settings))
+
+    empty = client.get("/api/live-watch/zero-vs-dataset")
+    assert empty.status_code == 200
+    assert empty.json()["has_live_watch"] is False
+
+    payload = {
+        "source": "sncf-probe-extension",
+        "captured_at": "2026-05-15T09:00:00Z",
+        "summary": {"watch_count": 1, "zero_offer_count": 2},
+        "watches": [
+            {
+                "id": "Paris|Lyon|2026-05-23",
+                "origin_label": "Paris",
+                "destination_label": "Lyon Part Dieu",
+                "watch_date": "2026-05-23",
+                "status": "ok",
+                "zero_offer_count": 2,
+                "zero_offers": [
+                    {
+                        "travelId": "2026-05-23T06:00_6611",
+                        "departureTime": "06:00",
+                        "origin": "PARIS GARE DE LYON",
+                        "destination": "LYON PART DIEU",
+                    },
+                    {
+                        "travelId": "2026-05-23T10:15_6699",
+                        "departureTime": "10:15",
+                        "origin": "PARIS GARE DE LYON",
+                        "destination": "LYON PART DIEU",
+                    },
+                ],
+                "history": [],
+            }
+        ],
+    }
+    ingest = client.post("/api/live-watch/ingest", json=payload)
+    assert ingest.status_code == 200
+
+    response = client.get("/api/live-watch/zero-vs-dataset")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_live_watch"] is True
+    assert body["dataset"]["zero_count"] == 14
+    assert body["summary"]["live_zero_offer_count"] == 2
+    assert body["summary"]["in_dataset_zero"] == 1
+    assert body["summary"]["not_in_dataset"] == 1
+    route = body["routes"][0]
+    assert route["not_in_dataset_count"] == 1
+    assert route["not_in_dataset"][0]["travel_id"] == "2026-05-23T10:15_6699"
+    assert route["offers"][0]["matched_dataset_row"]["train_no"] == "6611"

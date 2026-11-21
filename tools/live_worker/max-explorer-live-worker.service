@@ -1,0 +1,19 @@
+[Unit]
+Description=Max Explorer - worker live navigateur (Chromium + extension SNCF Connect)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adapte ce chemin vers le depot sur la machine worker (ex. Raspberry Pi) :
+ExecStart=%h/TGVMaxSolution/tools/live_worker/run-live-worker.sh
+Environment=PROFILE_DIR=%h/.config/max-explorer-live-worker
+Environment=WATCH_TAB_URL=https://www.sncf-connect.com/home/search
+# Si le backend tourne sur Render, regle la meme URL dans le popup de
+# l'extension (champ "Backend live-watch"), le profil est persistant :
+# Environment=BACKEND_BASE_URL=https://ton-app.onrender.com
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

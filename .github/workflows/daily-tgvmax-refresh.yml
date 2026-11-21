@@ -1,0 +1,39 @@
+name: Daily TGV MAX refresh
+
+# Refresh gratuit 24/7 du dataset open data tgvmax sur le backend deploye
+# (Render) + issue GitHub si de nouveaux trains a 0 EUR apparaissent.
+# Gratuit sur un repo PUBLIC (minutes illimitees) ; sur un repo prive, consomme
+# les 2000 minutes/mo du plan gratuit. Granularite = publication SNCF (1x/jour).
+
+on:
+  schedule:
+    # UTC : couvre ~06h-11h et 16h heure de Paris (publication "debut de matinee")
+    - cron: "0 5,6,7,8,10,15 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Refresh + diff zero_watch + alerte issue
+        env:
+          RENDER_BASE_URL: ${{ vars.RENDER_BASE_URL }}
+          ALERT_ON_NEW_ZERO: ${{ vars.ALERT_ON_NEW_ZERO }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -z "$RENDER_BASE_URL" ]; then
+            echo "Variable de repo RENDER_BASE_URL non configuree : rien a faire (voir README)."
+            exit 0
+          fi
+          python3 tools/refresh_and_alert.py --base-url "$RENDER_BASE_URL"
